@@ -78,6 +78,49 @@ with pydwshape.DirectWriteTracer() as tracer:
 Each tracer owns a private worker subprocess that does the shaping; Frida is
 attached to *that* process, never to yours.
 
+### Feeding a `shape_trace`-style consumer (e.g. BabelMap)
+
+Consumers expect Crowbar/HarfBuzz rows `[{m, glyphs, depth, effective}]` 
+with glyph dicts `{g, cl, dx, dy, ax, ay}`. A minimal adapter is:
+
+```python
+import pydwshape
+
+
+def directwrite_shape_trace(result: pydwshape.TraceResult) -> dict:
+    rows = [{"m": "start table GSUB", "glyphs": [], "depth": 0, "effective": False}]
+    for run in result.runs:
+        if run.table != "GSUB":
+            continue
+        for phase in run.feature_phases:
+            # DirectWrite applies a phase = a set of features together
+            rows.append({
+                "m": "apply features [" + " ".join(phase.features) + "]",
+                "glyphs": [], "depth": 0, "effective": False,
+            })
+            for lk in phase.lookups:
+                changed = lk.changed  # [] or None when the count changed
+                rows.append({
+                    "m": f"lookup {lk.index}",
+                    # DirectWrite exposes no per-lookup cluster: seed clusters
+                    # from your own cmap and propagate; a simple fallback is the
+                    # slot index. Use result.final_records for the real ones.
+                    "glyphs": [{"g": g, "cl": i} for i, g in enumerate(lk.glyphs)],
+                    "depth": 0,
+                    "effective": bool(changed),  # compare arrays for count changes
+                })
+    final = [r.to_dict() for r in result.final_records] or \
+            [{"g": g, "cl": i} for i, g in enumerate(result.final_glyphs)]
+    return {"upem": result.upem, "stages": rows, "final": final,
+            "messages": [r["m"] for r in rows], "engine": "directwrite"}
+```
+
+Fidelity notes for consumers: DirectWrite does **not** expose per-lookup
+clusters or GPOS position deltas, so intermediate `glyphs` only carry gids
+(seed/propagate `cl` from your own cmap baseline like BabelScript does) and the
+final positions come from `result.final_records`. See `DESIGN.md` for the
+DirectWrite-native granularity (features are grouped into phases).
+
 ### Result structure
 
 `TraceResult`:
@@ -87,9 +130,13 @@ attached to *that* process, never to yours.
 | `upem` | font units-per-em |
 | `final_glyphs` | authoritative final glyph ids (from DirectWrite) |
 | `glyph_names` | `gid → name` for the final glyphs (via `dwriteshapepy`) |
+| `final_records` | final run as positioned `GlyphRecord`s (`g`, `cl`, `dx`, `dy`, `ax`, `ay`) — DirectWrite clusters + real advances/offsets |
 | `runs` | `ShapeRun`s — one per top-level bracket (GSUB run(s), then GPOS) |
 | `meta` | `ts_version`, `addr_source` (`rva`/`symbols`), timings, … |
 | `raw_events` | the raw agent events (for debugging / re-parsing) |
+
+`GlyphRecord` is a small frozen dataclass with a `to_dict()`; `final_records` is
+what a `shape_trace`-style consumer needs for the final (positioned) run.
 
 `ShapeRun` → `FeaturePhase` (a `features` tag set applied together) →
 `LookupEvent` (`glyphs` = full glyph array after the lookup; `changed` =
