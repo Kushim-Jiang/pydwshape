@@ -614,6 +614,53 @@ fn resolve_dwcore(explicit: &Option<String>) -> String {
     panic!("DWriteCore.dll not found — pass --dwcore <path> or set DWCORE_DLL");
 }
 
+fn u16_at(d: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([d[o], d[o + 1]])
+}
+fn u32_at(d: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
+}
+
+/// Relocate the hook target by scanning the PE's raw sections for the prologue
+/// signature, so a future DWriteCore build that moved the dispatcher is still
+/// found instead of failing hard. Returns the module-relative RVA.
+fn pe_lookup_rva_for_sig(path: &str, sig: &[u8]) -> Option<u64> {
+    let d = std::fs::read(path).ok()?;
+    if d.len() < 0x40 || &d[0..2] != b"MZ" {
+        return None;
+    }
+    let e_lfanew = u32_at(&d, 0x3C) as usize;
+    if e_lfanew + 24 > d.len() || &d[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
+        return None;
+    }
+    let nsec = u16_at(&d, e_lfanew + 6) as usize;
+    let optsz = u16_at(&d, e_lfanew + 20) as usize;
+    let base = e_lfanew + 24 + optsz;
+    for i in 0..nsec {
+        let o = base + i * 40;
+        if o + 40 > d.len() {
+            break;
+        }
+        let va = u32_at(&d, o + 12) as usize;
+        let roff = u32_at(&d, o + 20) as usize;
+        let chars = u32_at(&d, o + 36);
+        if roff == 0 || chars & 0x2000_0000 == 0 {
+            continue; // non-executable / empty
+        }
+        let avail = d.len().saturating_sub(roff);
+        let blob = &d[roff..roff + avail.min(0x4_0000)];
+        if blob.len() < sig.len() {
+            continue;
+        }
+        for j in 0..=blob.len() - sig.len() {
+            if &blob[j..j + sig.len()] == sig {
+                return Some((va + j) as u64);
+            }
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -658,12 +705,31 @@ fn main() {
 
     unsafe {
         // Load DWriteCore, verify + hook its per-lookup dispatcher (0x6d280).
+        // If a newer DWriteCore moved the dispatcher, relocate by scanning the
+        // DLL's executable sections for the prologue signature.
         let dwc_path = resolve_dwcore(&dwcore);
         let dwc_base = load_base(&dwc_path);
-        let target = dwc_base + DWC_LOOKUP_RVA;
+        let mut rva = DWC_LOOKUP_RVA;
         let mut got = [0u8; 12];
-        ptr::copy_nonoverlapping(target as *const u8, got.as_mut_ptr(), 12);
-        assert_eq!(got, SIG_DWC_LOOKUP, "DWriteCore lookup dispatcher signature mismatch");
+        let t0 = dwc_base + rva;
+        ptr::copy_nonoverlapping(t0 as *const u8, got.as_mut_ptr(), 12);
+        if got != SIG_DWC_LOOKUP {
+            match pe_lookup_rva_for_sig(&dwc_path, &SIG_DWC_LOOKUP) {
+                Some(r) => {
+                    eprintln!(
+                        "note: DWriteCore lookup dispatcher moved 0x{DWC_LOOKUP_RVA:x} -> 0x{r:x}; re-verified"
+                    );
+                    rva = r;
+                    let t2 = dwc_base + rva;
+                    ptr::copy_nonoverlapping(t2 as *const u8, got.as_mut_ptr(), 12);
+                    assert_eq!(got, SIG_DWC_LOOKUP, "relocated signature mismatch");
+                }
+                None => panic!(
+                    "DWriteCore lookup dispatcher signature not found at 0x{DWC_LOOKUP_RVA:x} nor in any executable section — this DWriteCore build is unsupported"
+                ),
+            }
+        }
+        let target = dwc_base + rva;
 
         let block = alloc_near(dwc_base, 0x200);
         install_dwc_hook(block, 0x200, target, &got, 0x00, 0x80);
@@ -783,13 +849,19 @@ fn main() {
 
         // ---- Final glyphs (DWriteCore authoritative) -----------------------
         let nfin = gres.glyphs.len();
-        let clmap = glyph_clusters(&gres.cluster_map, nfin);
+        // Cluster: same source as the stage rows (otls record idx) when the
+        // last captured snapshot matches the final run length, else fall back
+        // to inverting DirectWrite's clusterMap.
+        let final_cl: Vec<u32> = match snaps.last() {
+            Some(last) if last.recs.len() == nfin => last.recs.iter().map(|r| r.idx as u32).collect(),
+            _ => glyph_clusters(&gres.cluster_map, nfin),
+        };
         let mut final_glyphs = Vec::with_capacity(nfin);
         for j in 0..nfin {
             let (ax, ay, dx, dy) = positions.get(j).copied().unwrap_or((0, 0, 0, 0));
             final_glyphs.push(json!({
                 "g": gres.glyphs[j],
-                "cl": clmap[j],
+                "cl": final_cl[j],
                 "dx": dx, "dy": dy, "ax": ax, "ay": ay,
                 "flags": 0,
             }));

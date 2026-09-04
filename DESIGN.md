@@ -76,6 +76,9 @@ Universal Shaping Engine stages (see
 - Target (DWriteCore 2.1.1.2605; runtime-verified signature): the **otls
   per-lookup dispatcher** `base+0x6D280`; its first 12 bytes are clean
   one-byte pushes (`41 57 41 56 41 55 41 54 56 57 55 53`).
+- **Auto-relocation**: if the fixed RVA no longer matches, `dwtshape` scans
+  the DLL's executable sections for the 12-byte prologue and hooks wherever it
+  lands — a future DWriteCore build that moves the dispatcher keeps working.
 - **12-byte absolute-jump patch** (`mov rax,imm64; jmp rax`) to a stub placed
   in a scratch page near the module.
 - Stub preserves `rcx/rdx/r8/r9` on the stack, loads the **5th stack arg**
@@ -96,9 +99,10 @@ Raw captured steps → rows → the same filtering used by
 - `depth` from `start lookup`/`end lookup` nesting;
 - `effective` when the buffer changed inside a lookup;
 - drop glyph-op noise + dedupe unchanged buffers unless `--show-all-lookups`;
-- `final` = last stage buffer, merged with real DWrite
-  advances/offsets (design units, `fontEmSize = upem`) and per-glyph cluster
-  (inverted from DWrite `clusterMap`).
+- `final` = last stage buffer, merged with real DWrite advances/offsets
+  (design units, `fontEmSize = upem`). Cluster (`cl`) uses one source
+  everywhere — the otls glyph-record `idx` (final falls back to inverting
+  DWrite `clusterMap` only if no snapshot matches).
 
 ## 6. CLI / I/O
 
@@ -128,16 +132,20 @@ build/samples/              produced traces (dwrite_mong.json)
 
 - Windows-only, **single engine**: DWriteCore (`--dwcore` / `DWCORE_DLL` /
   exe dir / repo copy). No system TextShaping/dwrite anywhere.
-- Hook target signature-locked for DWriteCore 2.1.1.2605 (RVA `0x6D280`) —
-  update RVA + signature if a future DWriteCore build moves the dispatcher.
+- Hook target signature-locked for DWriteCore 2.1.1.2605 (RVA `0x6D280`) with
+  **auto-relocation** by prologue scan for future builds (see §4).
 - Single-threaded, our-process hooks only (12-byte absolute-jump patch).
-- Custom per-feature toggling: not yet wired (font-default features);
-  `DWRITE_FONT_FEATURE_TAG` mapping is the next step for the “toggle feature”
-  UI.
-- Feature-phase *labels* (init/medi/fina/rclt…) are not yet attributed per
-  lookup from inside DWriteCore (the dispatcher doesn't pass the feature
-  tag); the per-lookup glyph timeline is exact and USE-aligned. Optional next
-  step: attribute feature tags by matching against the font's GSUB feature →
-  lookup map, or by hooking the otls feature driver.
-- GPOS lookups are captured but Mongolian has none; GPOS *positioning* is
-  applied for `final` regardless.
+- Validated: Mongolian golden + trace self-consistency, Latin & Devanagari vs
+  HarfBuzz match and GPOS lookups captured; Arabic/Hebrew run (RTL order /
+  default-feature differences vs HarfBuzz are expected). Regression matrix:
+  `python/compare_harfbuzz.py`.
+- Remaining / optional:
+  - Custom per-feature toggling (`DWRITE_FONT_FEATURE_TAG` mapping) for the
+    “toggle feature” UI.
+  - Per-lookup feature-name labels (init/medi/fina/rclt…) from inside
+    DWriteCore — the dispatcher doesn't pass the feature tag. Options: match
+    each transition against the font's GSUB feature→lookup map, or hook the
+    otls feature driver; alternatively attribute labels on the babelmap side
+    by aligning the (identical) HarfBuzz per-lookup trace.
+  - Distribution: bundle DWriteCore into a wheel (data-file wheel today, or a
+    PyO3 `abi3` wheel later).

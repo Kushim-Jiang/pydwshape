@@ -47,6 +47,16 @@ Golden check (Mongolian): `hudum.otf` + `ᠰᠠᠢᠬᠠᠨ` →
 `[675,281,303,471,281,351]` — identical to system TextShaping, DWriteCore and
 HarfBuzz.
 
+## Validation
+
+Regression matrix (Mongolian golden + Latin/Arabic/Hebrew/Devanagari vs
+HarfBuzz, incl. GPOS capture + trace self-consistency):
+
+```sh
+# needs the babelsoft venv (uharfbuzz)
+& 'D:\Github\babelsoft-py\.venv\Scripts\python.exe' python/compare_harfbuzz.py
+```
+
 ## Build / run
 
 ```sh
@@ -71,18 +81,23 @@ binary; see its docstring for wiring. Sample output:
 ## Layout
 
 - `src/main.rs` — the whole engine (hook, DWrite driver, Crowbar assembly).
-- `python/` — babelmap shaper adapter.
+- `python/` — babelmap shaper adapter + `compare_harfbuzz.py` regression matrix.
 - `build/` — research + artifacts (git-ignored): `dwc_poc/` (RE + PoCs,
   `USE_shaping_order.md`, `hb_compare.py`), `legacy/` (old Python pydwshape),
   `samples/`.
 
 ## Notes / constraints
 
-- Windows-only; shapes with the **system** TextShaping.dll (signature-locked
-  for 10.0.26100.x). DWriteCore is intentionally _not_ traced internally (its
-  Rust `otls` engine has no stable hookable ApplyFeatures/ApplyLookup); it is
-  kept as a parity reference (identical output).
+- Windows-only, **single engine = DWriteCore** (app-local, version-pinned):
+  final glyphs/positions AND the per-lookup trace both come from it. No system
+  `TextShaping`/`dwrite` is loaded.
+- Hook target is signature-locked for DWriteCore 2.1.1.2605 (RVA `0x6D280`).
+  If a newer DWriteCore moves it, `dwtshape` **auto-relocates** by scanning the
+  DLL's executable sections for the 12-byte prologue before failing.
 - Single-threaded by design (hooks installed in our own process, trace driven
   by our own `GetGlyphs`/`GetGlyphPlacements` calls).
-- Custom per-feature toggling is not yet wired through the Rust engine
-  (default features only).
+- RTL scripts (Arabic/Hebrew) output glyphs in a different order than
+  HarfBuzz unless `--direction rtl` is passed; per-lookup buffers are in
+  logical order, the final run may be reordered for RTL.
+- Custom per-feature toggling and per-lookup feature-name labels are not yet
+  wired through the Rust engine (font-default features only).
