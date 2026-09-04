@@ -40,9 +40,6 @@ from .errors import WindowsOnlyError, WorkerError
 
 __all__ = ["main"]
 
-_LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
-_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS = 0x00001000
-
 
 def _textshaping_base() -> int | None:
     """Base address of a loaded TextShaping.dll, or ``None``."""
@@ -59,18 +56,16 @@ def _preload_textshaping() -> None:
     The DLL is a system delay-load dependency of DirectWrite; loading it early
     is safe (Windows maps it once) and guarantees ``Process.getModuleByName``
     sees it the moment Frida attaches.
+
+    NB: use a *plain* ``LoadLibraryW`` (absolute path). Loading with
+    ``LOAD_LIBRARY_SEARCH_*`` flags keeps the module out of the loader list
+    that Frida scans, so the agent would not be able to see or hook it.
     """
     path = addr_resolve.textshaping_path()
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.LoadLibraryExW.restype = ctypes.c_void_p
-    k32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
-    flags = _LOAD_LIBRARY_SEARCH_SYSTEM32 | _LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
-    handle = k32.LoadLibraryExW(str(path), None, flags)
-    if not handle:
-        # Fall back to a plain name-based load (system search).
-        handle = k32.LoadLibraryExW(path.name, None, _LOAD_LIBRARY_SEARCH_SYSTEM32)
-    if not handle:
-        raise WorkerError(f"Failed to preload {path} (error {ctypes.get_last_error()}).")
+    try:
+        ctypes.WinDLL(str(path))
+    except OSError as exc:
+        raise WorkerError(f"Failed to preload {path}: {exc}") from exc
 
 
 def _normalize_features(features: Any) -> dict[str, Any]:

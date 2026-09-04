@@ -142,7 +142,9 @@ class TraceResult:
     def substitutions(self) -> list[GlyphChange]:
         """Every reported glyph substitution in trace order (for assertions)."""
         return [
-            change for lookup in (lk for run in self.runs for lk in run.lookups) for change in (lookup.changed or [])
+            change
+            for lookup in (lk for run in self.runs for lk in run.lookups)
+            for change in (lookup.changed or [])
         ]
 
 
@@ -338,7 +340,9 @@ class DirectWriteTracer:
         if not text:
             raise ValueError("text must not be empty")
         self._ensure_engine()
-        outcome = self._engine.shape(self._font_to_path(font), text, features=features, language=language)
+        outcome = self._engine.shape(
+            self._font_to_path(font), text, features=features, language=language
+        )
         return build_trace_result(outcome.events, outcome.result, outcome.meta)
 
     def close(self) -> None:
