@@ -109,7 +109,24 @@ def _shape(
 
     dw.shape(font, buf, _normalize_features(features))
 
-    glyphs = [int(g.codepoint) for g in buf.glyph_infos]
+    infos = list(buf.glyph_infos)
+    poss = list(buf.glyph_positions)
+    glyphs: list[int] = []
+    glyph_records: list[dict[str, int]] = []
+    for i, gi in enumerate(infos):
+        gid = int(gi.codepoint)
+        glyphs.append(gid)
+        po = poss[i] if i < len(poss) else None
+        glyph_records.append(
+            {
+                "g": gid,
+                "cl": int(getattr(gi, "cluster", 0) or 0),
+                "dx": round(float(getattr(po, "x_offset", 0) or 0)),
+                "dy": round(float(getattr(po, "y_offset", 0) or 0)),
+                "ax": round(float(getattr(po, "x_advance", 0) or 0)),
+                "ay": round(float(getattr(po, "y_advance", 0) or 0)),
+            }
+        )
     glyph_names: dict[int, str] = {}
     for gid in set(glyphs):
         try:
@@ -118,7 +135,12 @@ def _shape(
             name = None
         if name:
             glyph_names[gid] = str(name)
-    return {"upem": upem, "glyphs": glyphs, "glyph_names": glyph_names}
+    return {
+        "upem": upem,
+        "glyphs": glyphs,
+        "glyph_records": glyph_records,
+        "glyph_names": glyph_names,
+    }
 
 
 def _emit(obj: dict[str, Any]) -> None:

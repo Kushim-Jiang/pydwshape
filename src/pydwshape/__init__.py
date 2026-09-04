@@ -31,6 +31,7 @@ from .api import (
     FeaturePhase,
     FontSource,
     GlyphChange,
+    GlyphRecord,
     LookupEvent,
     ShapeRun,
     TraceResult,
@@ -60,6 +61,7 @@ __all__ = [
     "FeaturePhase",
     "LookupEvent",
     "GlyphChange",
+    "GlyphRecord",
     "FontSource",
     # errors
     "PydwshapeError",

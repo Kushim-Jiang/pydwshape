@@ -44,6 +44,7 @@ __all__ = [
     "FeaturePhase",
     "FontSource",
     "GlyphChange",
+    "GlyphRecord",
     "LookupEvent",
     "ShapeRun",
     "TraceResult",
@@ -56,6 +57,33 @@ FontSource = Union[str, "os.PathLike[str]", bytes, bytearray]
 
 #: A glyph change ``(position, old_gid, new_gid)``.
 GlyphChange = tuple[int, int, int]
+
+
+@dataclass(frozen=True)
+class GlyphRecord:
+    """One positioned glyph of the final DirectWrite run (babelmap-compatible).
+
+    Field semantics follow BabelMap's trace glyph schema: ``g`` = glyph id,
+    ``cl`` = DirectWrite cluster (character index), ``dx/dy`` offsets and
+    ``ax/ay`` advances in font units.
+    """
+
+    g: int
+    cl: int
+    dx: int = 0
+    dy: int = 0
+    ax: int = 0
+    ay: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "g": self.g,
+            "cl": self.cl,
+            "dx": self.dx,
+            "dy": self.dy,
+            "ax": self.ax,
+            "ay": self.ay,
+        }
 
 
 @dataclass
@@ -101,7 +129,8 @@ class TraceResult:
     upem: int  # font units-per-em
     final_glyphs: list[int]  # authoritative final glyph ids (from the worker)
     glyph_names: dict[int, str]  # gid -> PostScript-style name (final glyphs)
-    runs: list[ShapeRun]  # GSUB run(s) then the GPOS run, in order
+    final_records: list[GlyphRecord] = field(default_factory=list)  # final run w/ cluster+positions
+    runs: list[ShapeRun] = field(default_factory=list)  # GSUB run(s) then the GPOS run, in order
     meta: dict[str, Any] = field(default_factory=dict)  # engine/build/addr info
     raw_events: list[dict[str, Any]] = field(default_factory=list)  # agent events
 
@@ -113,9 +142,7 @@ class TraceResult:
     def substitutions(self) -> list[GlyphChange]:
         """Every reported glyph substitution in trace order (for assertions)."""
         return [
-            change
-            for lookup in (lk for run in self.runs for lk in run.lookups)
-            for change in (lookup.changed or [])
+            change for lookup in (lk for run in self.runs for lk in run.lookups) for change in (lookup.changed or [])
         ]
 
 
@@ -127,6 +154,30 @@ def _as_int_mapping(data: Mapping[Any, Any] | None) -> dict[int, str]:
     for key, value in data.items():
         try:
             out[int(key)] = str(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _as_glyph_records(data: Any) -> list[GlyphRecord]:
+    """Coerce a JSON-decoded ``glyph_records`` list into GlyphRecords."""
+    if not isinstance(data, list):
+        return []
+    out: list[GlyphRecord] = []
+    for item in data:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            out.append(
+                GlyphRecord(
+                    g=int(item.get("g", 0)),
+                    cl=int(item.get("cl", 0) or 0),
+                    dx=int(item.get("dx", 0) or 0),
+                    dy=int(item.get("dy", 0) or 0),
+                    ax=int(item.get("ax", 0) or 0),
+                    ay=int(item.get("ay", 0) or 0),
+                )
+            )
         except (TypeError, ValueError):
             continue
     return out
@@ -215,6 +266,7 @@ def build_trace_result(
     upem = int(worker_result.get("upem") or 0)
     glyphs = [int(g) for g in worker_result.get("glyphs") or []]
     names = _as_int_mapping(worker_result.get("glyph_names"))
+    records = _as_glyph_records(worker_result.get("glyph_records"))
     meta_out = dict(meta or {})
     meta_out.setdefault("engine", "directwrite")
     meta_out.setdefault("pydwshape_version", __version__)
@@ -222,6 +274,7 @@ def build_trace_result(
         upem=upem,
         final_glyphs=glyphs,
         glyph_names=names,
+        final_records=records,
         runs=_group_runs(events),
         meta=meta_out,
         raw_events=list(events),
@@ -285,9 +338,7 @@ class DirectWriteTracer:
         if not text:
             raise ValueError("text must not be empty")
         self._ensure_engine()
-        outcome = self._engine.shape(
-            self._font_to_path(font), text, features=features, language=language
-        )
+        outcome = self._engine.shape(self._font_to_path(font), text, features=features, language=language)
         return build_trace_result(outcome.events, outcome.result, outcome.meta)
 
     def close(self) -> None:
