@@ -1,0 +1,21 @@
+{
+  "$comment": "Offline RVA registry for TextShaping.dll internal functions. Address resolution NEVER downloads PDBs or queries the network; it reads this file and verifies byte signatures before hooking (never blind-hook). Keys are the TextShaping FileVersion major family (first three dotted segments, e.g. 10.0.26100). To add a new build, follow tools/ghidra/README.md (decompile -> learn ApplyFeatures/ApplyLookup RVAs -> dump signatures with tools/pe_rva.py -> append an entry here).",
+  "windows": {
+    "10.0.26100": {
+      "family": "10.0.26100",
+      "note": "Windows 11 24H2. Measured 2026-09-04 against TextShaping 10.0.26100.9223 (dwrite 10.0.26100.8875).",
+      "functions": {
+        "ApplyFeatures": { "rva": "0x15650", "signature": "4055564154415541564157488dac24e8" },
+        "ApplyLookup": { "rva": "0x7A60", "signature": "4c894c24204889542410555356415441" }
+      }
+    },
+    "10.0.19041": {
+      "family": "10.0.19041",
+      "note": "Windows 10 2004+ (placeholder; same RVAs observed on the Win11 24H2 reference build but UNVERIFIED on 19041 - run tools/ghidra to confirm before trusting).",
+      "functions": {
+        "ApplyFeatures": { "rva": "0x15650", "signature": "4055564154415541564157488dac24e8" },
+        "ApplyLookup": { "rva": "0x7A60", "signature": "4c894c24204889542410555356415441" }
+      }
+    }
+  }
+}
