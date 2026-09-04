@@ -57,6 +57,10 @@ def test_worker_ready_ping_and_latin_shape() -> None:
             assert result["t"] == "result"
             assert result["upem"] > 0
             assert isinstance(result["glyphs"], list) and result["glyphs"]
+            records = result.get("glyph_records") or []
+            assert len(records) == len(result["glyphs"])
+            assert all(isinstance(r.get("g"), int) for r in records)
+            assert all("cl" in r and "ax" in r for r in records)
     finally:
         try:
             if proc.stdin is not None:

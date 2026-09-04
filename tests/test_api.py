@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pydwshape as pyd
-from pydwshape import FeaturePhase, LookupEvent, ShapeRun, TraceResult
+from pydwshape import FeaturePhase, GlyphRecord, LookupEvent, ShapeRun, TraceResult
 from pydwshape.api import _group_runs, build_trace_result
 
 
@@ -23,6 +23,7 @@ def test_public_names_are_exported() -> None:
         "FeaturePhase",
         "LookupEvent",
         "GlyphChange",
+        "GlyphRecord",
         "FontSource",
         "PydwshapeError",
         "WindowsOnlyError",
@@ -65,6 +66,14 @@ def test_dataclass_defaults() -> None:
     run = ShapeRun(index=1, table="GSUB")
     assert run.lookups == []
     assert run.feature_phases == []
+    assert TraceResult(upem=0, final_glyphs=[], glyph_names={}).final_records == []
+
+
+def test_glyph_record_roundtrip() -> None:
+    rec = GlyphRecord(g=675, cl=0, dx=-12, dy=0, ax=1024, ay=0)
+    assert rec.to_dict() == {"g": 675, "cl": 0, "dx": -12, "dy": 0, "ax": 1024, "ay": 0}
+    # frozen value type with zero defaults
+    assert GlyphRecord(g=1, cl=2).to_dict() == {"g": 1, "cl": 2, "dx": 0, "dy": 0, "ax": 0, "ay": 0}
 
 
 def _synthetic_events() -> list[dict]:
@@ -148,6 +157,11 @@ def test_build_trace_result_maps_and_extracts() -> None:
             "upem": 2048,
             "glyphs": [11, 20, 30],
             "glyph_names": {"11": "uni1830", "20": "uni1820"},
+            "glyph_records": [
+                {"g": 11, "cl": 0, "dx": 0, "dy": 0, "ax": 500, "ay": 0},
+                {"g": 20, "cl": 1, "dx": 2, "dy": 0, "ax": 600, "ay": 0},
+                {"g": 30, "cl": 2, "dx": 0, "dy": 3, "ax": 0, "ay": 700},
+            ],
         },
         meta={"engine_build": "10.0.26100"},
     )
@@ -158,6 +172,12 @@ def test_build_trace_result_maps_and_extracts() -> None:
     assert result.meta["engine_build"] == "10.0.26100"
     assert result.substitutions() == [(0, 10, 11)]
     assert len(result.raw_events) == len(_synthetic_events())
+    assert result.final_records == [
+        GlyphRecord(g=11, cl=0, dx=0, dy=0, ax=500, ay=0),
+        GlyphRecord(g=20, cl=1, dx=2, dy=0, ax=600, ay=0),
+        GlyphRecord(g=30, cl=2, dx=0, dy=3, ax=0, ay=700),
+    ]
+    assert [r.to_dict()["g"] for r in result.final_records] == [11, 20, 30]
 
 
 def test_build_trace_result_empty_result() -> None:
@@ -166,6 +186,7 @@ def test_build_trace_result_empty_result() -> None:
     assert result.final_glyphs == []
     assert result.runs == []
     assert result.glyph_names == {}
+    assert result.final_records == []
 
 
 def test_shape_run_lookups_property() -> None:
