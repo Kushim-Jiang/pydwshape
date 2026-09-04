@@ -1,209 +1,88 @@
-# pydwshape
+# dwtshape — DirectWrite step-by-step shaping tracer (Rust)
 
-**Feature-level DirectWrite shaping traces — feature names + per-lookup glyph
-snapshots, semantically aligned with HarfBuzz stages.** Windows-only.
+Rust rewrite of the old pydwshape (Python + Frida, now archived in
+`build/legacy/`). It emits a **per-feature / per-lookup shaping trace** in the
+shape-trace schema used by [BabelSoft](https://github.com/)'s BabelMap
+`/api/opentype/shape` endpoint — i.e. the DirectWrite analogue of the
+HarfBuzz / HarfRust trace engines.
 
-`pydwshape` takes `(font, text)`, shapes it with Microsoft DirectWrite (via
-[`dwriteshapepy`](https://github.com/microsoft/DWriteShapePy)), and returns a
-structured trace of *every* OpenType feature phase and the full glyph snapshot
-after *every* lookup inside `TextShaping.dll` — the Windows component that does
-real complex-script shaping (GSUB/GPOS) for DirectWrite. Font developers can
-use the output to compare DirectWrite's engine behaviour with HarfBuzz.
+### Engine: DWriteCore-only (native per-lookup trace)
 
-```python
-import pydwshape
+**Everything runs on DWriteCore** (app-local, version-pinned, hijack-proof):
+both the authoritative `final` glyphs + positions **and** the step-by-step
+per-lookup trace — no system `TextShaping`/`dwrite` is loaded at all.
+Located via `--dwcore`, env `DWCORE_DLL`, next to the exe, or
+`build/dwc_poc/DWriteCore.dll`.
 
-result = pydwshape.trace_directwrite(font=r"D:\...\hudum.otf", text="ᠰᠠᠢᠬᠠᠨ")
+DirectWrite has no buffer-message callback, so to see inside a shape we
+self-hook one internal function of DWriteCore's Rust `otls` engine — the
+GSUB/GPOS single-lookup dispatcher:
 
-print(result.final_glyphs)  # [675, 281, 303, 471, 281, 351]
-for run in result.runs:  # a GSUB run, then a GPOS run
-    for phase in run.feature_phases:
-        print(phase.features)  # ['ccmp', 'locl'], ['init'], ['medi'], ...
-        for lookup in phase.lookups:
-            print(lookup.glyphs, lookup.changed)
+| Hooked fn | DWriteCore RVA | role |
+| --------- | -------------- | ---- |
+| otls per-lookup dispatcher | `base+0x6D280` | one lookup application; glyph buffer (`[obj+8]` records, `[obj+0x10]` count) is snapshotted on entry |
+
+Verified against DWriteCore 2.1.1.2605; the first bytes are checked against
+the known signature before patching (never a blind hook). See
+`build/dwc_poc/USE_shaping_order.md` for how the resulting per-lookup timeline
+maps onto the Microsoft USE (Universal Shaping Engine) ordering.
+
+## Output format (babelsoft `/api/opentype/shape`)
+
+```jsonc
+{
+  "upem": 1000, "glyph_count": 907, "engine": "directwrite",
+  "stages": [ // Crowbar-style, same as harfrust / uharfbuzz engines
+    { "m": "start lookup 1 GSUB features: init medi fina (DirectWrite)",
+      "glyphs": [{ "g": 673, "cl": 0, "dx": 0, "dy": 0, "ax": 0, "ay": 0, "flags": 0 }],
+      "depth": 1, "effective": true },
+    ...
+  ],
+  "final": [ { "g": 675, "cl": 0, "dx": 0, "dy": 0, "ax": 147, "ay": 0, "flags": 0 }, ... ],
+  "messages": [ "feature phase table=GSUB features=[init medi fina]", ... ]
+}
 ```
 
-## Highlights
+Golden check (Mongolian): `hudum.otf` + `ᠰᠠᠢᠬᠠᠨ` →
+`[675,281,303,471,281,351]` — identical to system TextShaping, DWriteCore and
+HarfBuzz.
 
-- **Feature-level granularity** — DirectWrite normally exposes only the final
-  glyph run. pydwshape observes the internal `ApplyFeatures` / `ApplyLookup`
-  calls in `TextShaping.dll` (via Frida) to expose each feature phase and the
-  per-lookup glyph state, mirroring HarfBuzz's per-lookup messages.
-- **Zero network at runtime.** The hook addresses are *not* exported by
-  `TextShaping.dll`, but pydwshape never downloads PDBs. It ships an offline
-  RVA registry + byte-signature verification (see `rva_registry.json` and
-  `tools/ghidra/README.md`) and refuses to *blind-hook*.
-- **No Microsoft binaries are bundled or redistributed.** pydwshape observes
-  the already-present system component read-only.
-- **Pure-Python wheel** (`py3-none-any`) — only `frida` and `dwriteshapepy` as
-  dependencies; nothing else.
+## Build / run
 
-## Platform / support
-
-| | |
-|---|---|
-| OS | **Microsoft Windows 10 / 11 only** (DirectWrite & `TextShaping.dll` do not exist elsewhere and cannot be redistributed). On macOS/Linux use HarfBuzz for an equivalent trace. |
-| TextShaping builds | A fixed offline registry covers e.g. `10.0.26100` (Win11 24H2). Unsupported builds raise `UnsupportedTextShapingError` with steps to extend the registry (`tools/ghidra/README.md`). |
-| Python | `>=3.9` (developed on 3.13). |
-| Scope | Complex-script OT shaping that runs through `TextShaping.dll` (Mongolian, Arabic, Indic, …). Simple Latin runs produce a glyph result with an empty trace. |
-
-## Installation
-
-```bash
-pip install pydwshape          # Windows only (markers gate the deps)
-# or from source
-uv sync --extra dev
+```sh
+cargo build --release
+# shape Mongolian text -> JSON trace
+target/release/dwtshape --font "hudum.otf" --text "ᠰᠠᠢᠬᠠᠨ" \
+    --script mong --out trace.json
 ```
 
-## Usage
+CLI: `--font <path> --text <str> [--script <iso15924>] [--language <bcp47>]
+[--direction auto|ltr|rtl] [--dwcore <DWriteCore.dll>] [--show-all-lookups]
+[--out <file>]`.
+(Passing `--text` with non-ASCII from a Windows PowerShell command line is lossy;
+use the Python adapter or an UTF-16-capable launcher.)
 
-### One-shot
+## babelmap integration
 
-```python
-result = pydwshape.trace_directwrite(font=r"D:\...\hudum.otf", text="ᠰᠠᠢᠬᠠᠨ")
-```
+`python/dwrite_trace_shaper.py` is a drop-in shaper that shells out to the
+binary; see its docstring for wiring. Sample output:
+`build/samples/dwrite_mong.json`.
 
-`font` may be a path or raw bytes; `features` maps an OpenType tag to
-`True`/`False`/int (default: engine defaults); `language` sets the run
-language.
+## Layout
 
-### Reuse one worker (many shapes, one Frida session)
+- `src/main.rs` — the whole engine (hook, DWrite driver, Crowbar assembly).
+- `python/` — babelmap shaper adapter.
+- `build/` — research + artifacts (git-ignored): `dwc_poc/` (RE + PoCs,
+  `USE_shaping_order.md`, `hb_compare.py`), `legacy/` (old Python pydwshape),
+  `samples/`.
 
-```python
-with pydwshape.DirectWriteTracer() as tracer:
-    for text in texts:
-        r = tracer.shape(hudum, text)
-```
+## Notes / constraints
 
-Each tracer owns a private worker subprocess that does the shaping; Frida is
-attached to *that* process, never to yours.
-
-### Feeding a `shape_trace`-style consumer (e.g. BabelMap)
-
-Consumers expect Crowbar/HarfBuzz rows `[{m, glyphs, depth, effective}]` 
-with glyph dicts `{g, cl, dx, dy, ax, ay}`. A minimal adapter is:
-
-```python
-import pydwshape
-
-
-def directwrite_shape_trace(result: pydwshape.TraceResult) -> dict:
-    rows = [{"m": "start table GSUB", "glyphs": [], "depth": 0, "effective": False}]
-    for run in result.runs:
-        if run.table != "GSUB":
-            continue
-        for phase in run.feature_phases:
-            # DirectWrite applies a phase = a set of features together
-            rows.append({
-                "m": "apply features [" + " ".join(phase.features) + "]",
-                "glyphs": [], "depth": 0, "effective": False,
-            })
-            for lk in phase.lookups:
-                changed = lk.changed  # [] or None when the count changed
-                rows.append({
-                    "m": f"lookup {lk.index}",
-                    # DirectWrite exposes no per-lookup cluster: seed clusters
-                    # from your own cmap and propagate; a simple fallback is the
-                    # slot index. Use result.final_records for the real ones.
-                    "glyphs": [{"g": g, "cl": i} for i, g in enumerate(lk.glyphs)],
-                    "depth": 0,
-                    "effective": bool(changed),  # compare arrays for count changes
-                })
-    final = [r.to_dict() for r in result.final_records] or \
-            [{"g": g, "cl": i} for i, g in enumerate(result.final_glyphs)]
-    return {"upem": result.upem, "stages": rows, "final": final,
-            "messages": [r["m"] for r in rows], "engine": "directwrite"}
-```
-
-Fidelity notes for consumers: DirectWrite does **not** expose per-lookup
-clusters or GPOS position deltas, so intermediate `glyphs` only carry gids
-(seed/propagate `cl` from your own cmap baseline like BabelScript does) and the
-final positions come from `result.final_records`. See `DESIGN.md` for the
-DirectWrite-native granularity (features are grouped into phases).
-
-### Result structure
-
-`TraceResult`:
-
-| field | meaning |
-|---|---|
-| `upem` | font units-per-em |
-| `final_glyphs` | authoritative final glyph ids (from DirectWrite) |
-| `glyph_names` | `gid → name` for the final glyphs (via `dwriteshapepy`) |
-| `final_records` | final run as positioned `GlyphRecord`s (`g`, `cl`, `dx`, `dy`, `ax`, `ay`) — DirectWrite clusters + real advances/offsets |
-| `runs` | `ShapeRun`s — one per top-level bracket (GSUB run(s), then GPOS) |
-| `meta` | `ts_version`, `addr_source` (`rva`/`symbols`), timings, … |
-| `raw_events` | the raw agent events (for debugging / re-parsing) |
-
-`GlyphRecord` is a small frozen dataclass with a `to_dict()`; `final_records` is
-what a `shape_trace`-style consumer needs for the final (positioned) run.
-
-`ShapeRun` → `FeaturePhase` (a `features` tag set applied together) →
-`LookupEvent` (`glyphs` = full glyph array after the lookup; `changed` =
-`[(pos, old, new), …]` diff, `None` when the count changed).
-
-Conveniences: `TraceResult.feature_phases` (flattened), `.substitutions()`
-(all reported glyph substitutions), `ShapeRun.lookups`.
-
-## Development
-
-```bash
-uv sync --extra dev        # create the venv and install editable + dev tools
-uv run pytest              # run the tests (live ones auto-skip without frida/font)
-uv run ruff check .        # lint
-uv run ruff format .       # format
-uv run mypy src            # type-check the package (strict)
-```
-
-Tests that need a live environment auto-skip:
-- live DirectWrite trace → needs Windows + `frida` + `dwriteshapepy`;
-- the golden Mongolian test → additionally needs a Mongolian OpenType font.
-  Point at yours with `PYDWSHAPE_HUDUM` (default
-  `D:\Github\mongfontbuilder\temp\hudum.otf`).
-
-The golden test asserts `ᠰᠠᠢᠬᠠᠨ` with hudum.otf finishes at
-`[675, 281, 303, 471, 281, 351]` — identical under DirectWrite **and**
-HarfBuzz (see `DESIGN.md §4.5`), and that `init` / `medi` / `fina` phases and
-the known `673→675`, `350→351` substitutions are visible in the trace.
-
-## Troubleshooting
-
-- **`FridaError: ... another program is intercepting DirectWrite (e.g. a font
-  tool such as MacType)`** — pydwshape needs to read/hook the *real*
-  `dwrite.dll` / `TextShaping.dll` in the worker. Font-replacement tools such
-  as **MacType** load those modules through their own loader, which makes them
-  invisible/unreadable to Frida (the worker still shapes fine). Disable the
-  tool for the traced process — exiting its tray icon may not fully unload its
-  hooks, so a full exit or reboot may be needed — then retry. The golden
-  tests auto-skip with this reason when tracing is blocked.
-- `UnsupportedTextShapingError` — your `TextShaping.dll` build isn't in the
-  offline RVA registry yet. Follow `tools/ghidra/README.md` to add it.
-- Only a final glyph run, no feature phases — the text went through a path
-  that doesn't hit `TextShaping.dll` (e.g. plain Latin). Complex-script text
-  (Mongolian, Arabic, Indic…) produces the full trace.
-
-## How it works (short version)
-
-```
-Python (you)  pydwshape.api.DirectWriteTracer
-   │  spawns
-   ▼
-worker (python -m pydwshape.worker)   ← Frida attaches here
-   │   shapes via dwriteshapepy → dwrite → TextShaping.dll (OTLS engine)
-   ▼
-agent.js hooks ShapingGetGlyphs / ShapingGetGlyphPositions (run brackets),
-   ApplyFeatures (feature phases) and ApplyLookup (per-lookup glyph snapshots),
-   emitting structured send() events that the orchestrator assembles.
-```
-
-Addresses of `ApplyFeatures`/`ApplyLookup` come from the offline RVA registry
-keyed by the local `TextShaping.dll` file version, verified against byte
-signatures before hooking. See `DESIGN.md` (kept alongside the drite research
-workspace) for the full design and the reverse-engineered struct layouts.
-
-## License & notices
-
-MIT — see `LICENSE`. `NOTICE.md` acknowledges `frida`, Microsoft's
-`DWriteShapePy`/`dwriteshapepy`, and states that pydwshape is **not a
-Microsoft product and has no Microsoft endorsement**. It traces Windows system
-components read-only; no Microsoft binary or PDB is bundled or redistributed.
+- Windows-only; shapes with the **system** TextShaping.dll (signature-locked
+  for 10.0.26100.x). DWriteCore is intentionally _not_ traced internally (its
+  Rust `otls` engine has no stable hookable ApplyFeatures/ApplyLookup); it is
+  kept as a parity reference (identical output).
+- Single-threaded by design (hooks installed in our own process, trace driven
+  by our own `GetGlyphs`/`GetGlyphPlacements` calls).
+- Custom per-feature toggling is not yet wired through the Rust engine
+  (default features only).
