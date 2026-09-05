@@ -13,6 +13,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build + smoke only; do NOT publish to PyPI"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -23,6 +28,9 @@ jobs:
     name: Build + publish win_amd64 abi3 wheel
     runs-on: windows-latest
     environment: release
+    env:
+      # tag pushes always publish; manual runs default to a dry run
+      DRY_RUN: ${{ inputs.dry_run || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,7 +71,15 @@ jobs:
           python -m pip install --quiet $whl
           python -c "import pydwshape, os; p = os.path.dirname(pydwshape.__file__); assert os.path.exists(os.path.join(p, 'DWriteCore.dll')), 'DWriteCore.dll missing'; print('smoke ok:', p)"
 
+      - name: Upload wheel (dry run)
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pydwshape-wheel
+          path: python/pydwshape-wheel/dist/*.whl
+
       - name: Publish to PyPI (trusted publishing)
+        if: env.DRY_RUN != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: python/pydwshape-wheel/dist
