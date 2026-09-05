@@ -109,9 +109,19 @@ Raw captured steps → rows → the same filtering used by
 ```
 dwtshape --font <path> --text <text> [--script <iso15924>]
          [--language <bcp47>] [--direction auto|ltr|rtl]
-         [--dwcore <DWriteCore.dll>] [--show-all-lookups]
-         [--out <file.json>]
+         [--features <+tag,-tag,tag=N,...>] [--dwcore <DWriteCore.dll>]
+         [--show-all-lookups] [--out <file.json>]
 ```
+
+`--features` forwards a single typographic-features range
+(`DWRITE_TYPOGRAPHIC_FEATURES` + `featureRangeLengths=[len]`) to
+`GetGlyphs`/`GetGlyphPlacements`. `DWRITE_FONT_FEATURE_TAG` stores the 4CC
+little-endian (e.g. `'kern'` == `0x6E72654B`, matching the crate's
+`DWRITE_FONT_FEATURE_TAG_KERNING`). DWriteCore semantics: optional features
+toggle (verified `+smcp` → `[131,144,145]`, `liga=0` drops `ffi/fi` ligatures),
+but **script-required** features (Mongolian/Arabic `init/medi/fina/rclt…`)
+are engine-managed and cannot be disabled via the public API (glyphs stay
+`[675,281,303,471,281,351]`; HarfBuzz would give `[673,277,295,461,277,350]`).
 
 Emits the engine JSON above. upem/glyph_count parsed from the font's `head` /
 `maxp` tables (no fontTools dependency). Script tag → DWrite script number via
@@ -140,12 +150,23 @@ build/samples/              produced traces (dwrite_mong.json)
   default-feature differences vs HarfBuzz are expected). Regression matrix:
   `python/compare_harfbuzz.py`.
 - Remaining / optional:
-  - Custom per-feature toggling (`DWRITE_FONT_FEATURE_TAG` mapping) for the
-    “toggle feature” UI.
   - Per-lookup feature-name labels (init/medi/fina/rclt…) from inside
     DWriteCore — the dispatcher doesn't pass the feature tag. Options: match
     each transition against the font's GSUB feature→lookup map, or hook the
-    otls feature driver; alternatively attribute labels on the babelmap side
-    by aligning the (identical) HarfBuzz per-lookup trace.
+    otls feature driver (explicit `--features` also routes GSUB through a
+    different driver than the hooked default path — an extra hook point to
+    consider); alternatively attribute labels on the babelmap side by
+    aligning the (identical) HarfBuzz per-lookup trace.
   - Distribution: bundle DWriteCore into a wheel (data-file wheel today, or a
     PyO3 `abi3` wheel later).
+
+## 9. Feature-toggle status (implemented)
+
+- `--features` CLI + `python/dwrite_trace_shaper.py` passthrough
+  (`{tag: bool} → +tag/-tag/tag=N`) — done; regression in
+  `build/dwc_poc/toggle_test.py`.
+- Optional features toggle through `DWRITE_FONT_FEATURE_TAG` (LE 4CC).
+- Script-required features are **fixed** by DWriteCore otls (verified against
+  Mongolian hudum: `init/medi/fina/rclt=0` unchanged). This is a DirectWrite
+  engine constraint, not a bug — document in UI that such checkboxes reflect
+  DWriteCore's fixed behavior (HarfBuzz reference output in the table above).

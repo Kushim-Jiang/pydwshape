@@ -61,8 +61,16 @@ def shape_with_dwrite(
     features: dict | None = None,
     show_all_lookups: bool = False,
 ) -> dict:
-    """Shape ``text`` with system DirectWrite/TextShaping and return the full
-    per-lookup shaping trace (schema-compatible with the HarfBuzz engine)."""
+    """Shape ``text`` with DWriteCore (pure DWriteCore native per-lookup
+    trace) and return the full per-lookup shaping trace (schema-compatible
+    with the HarfBuzz engine).
+
+    ``features`` is a ``{tag: bool|int}`` map (same convention as babelmap's
+    HarfBuzz / harfrust engines) or a ready-made ``+tag,-tag,tag=N`` string.
+    Note: DWriteCore applies script-required features unconditionally, so
+    toggles only affect *optional* features (e.g. ``liga``/``kern``/``smcp``)
+    and are ignored for mandatory positional features (Mongolian/Arabic
+    ``init``/``medi``/``fina``/``rclt`` …)."""
     fd, tmp = tempfile.mkstemp(suffix=".font")
     try:
         os.close(fd)
@@ -83,9 +91,9 @@ def shape_with_dwrite(
             args += ["--direction", direction]
         if show_all_lookups:
             args += ["--show-all-lookups"]
-        # NOTE: per-feature toggling is not yet wired through the Rust engine
-        # (it shapes with the font's default features). Passed/ignored here so
-        # callers don't have to special-case the DirectWrite engine.
+        fs = _features_to_str(features)
+        if fs:
+            args += ["--features", fs]
         r = subprocess.run(args, capture_output=True, check=False)
         if r.returncode != 0:
             raise RuntimeError(
@@ -99,3 +107,23 @@ def shape_with_dwrite(
             os.unlink(tmp)
         except OSError:
             pass
+
+
+def _features_to_str(features) -> str | None:
+    """Normalise ``{tag: bool|int}`` (or a pre-built string) into the
+    engine's ``+tag/-tag/tag=N`` list, mirroring babelmap's harfrust shaper."""
+    if isinstance(features, str):
+        s = features.strip()
+        return s or None
+    if not features:
+        return None
+    parts: list[str] = []
+    for tag, val in features.items():
+        tag = str(tag)
+        if val is True or val == 1:
+            parts.append(f"+{tag}")
+        elif val is False or val == 0:
+            parts.append(f"-{tag}")
+        else:
+            parts.append(f"{tag}={val}")
+    return ",".join(parts) if parts else None

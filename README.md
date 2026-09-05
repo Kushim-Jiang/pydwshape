@@ -67,10 +67,33 @@ target/release/dwtshape --font "hudum.otf" --text "ᠰᠠᠢᠬᠠᠨ" \
 ```
 
 CLI: `--font <path> --text <str> [--script <iso15924>] [--language <bcp47>]
-[--direction auto|ltr|rtl] [--dwcore <DWriteCore.dll>] [--show-all-lookups]
-[--out <file>]`.
+[--direction auto|ltr|rtl] [--features <+tag,-tag,tag=N,...>]
+[--dwcore <DWriteCore.dll>] [--show-all-lookups] [--out <file>]`.
 (Passing `--text` with non-ASCII from a Windows PowerShell command line is lossy;
 use the Python adapter or an UTF-16-capable launcher.)
+
+### Feature toggling (`--features`)
+
+`--features` accepts a comma list of `+tag` (on), `-tag` / `tag=0` (off) or
+`tag=N` (parameter N, e.g. `ss01=2`). It is forwarded to DWriteCore's
+`GetGlyphs`/`GetGlyphPlacements` as typographic features
+(`DWRITE_TYPOGRAPHIC_FEATURES`, one range over the whole text). Tag values use
+the `DWRITE_FONT_FEATURE_TAG` convention (the 4CC stored little-endian, e.g.
+`'kern'` = `0x6E72654B`).
+
+Semantics follow DirectWrite's engine, not HarfBuzz's:
+
+| case | example | DWriteCore result |
+|---|---|---|
+| optional feature **off by default**, turned on | `+smcp` on Calibri `abc` | `[258,271,272] → [131,144,145]` (matches HarfBuzz) |
+| optional feature **on by default**, turned off | `liga=0` on Calibri `office fi` | `ffi/fi` ligatures removed (matches HarfBuzz) |
+| **script-required** feature (Mongolian/Arabic …) | `init=0,medi=0,fina=0,rclt=0` on hudum | **ignored** — glyphs stay `[675,281,303,471,281,351]` |
+
+The last row is a DWriteCore constraint: positional/required features of
+complex scripts are engine-managed and cannot be disabled through typographic
+features (HarfBuzz *can*, giving `[673,277,295,461,277,350]`). The babelmap
+UI toggle therefore works for optional features; required-feature checkboxes
+reflect DWriteCore's fixed behavior.
 
 ## babelmap integration
 
@@ -99,5 +122,7 @@ binary; see its docstring for wiring. Sample output:
 - RTL scripts (Arabic/Hebrew) output glyphs in a different order than
   HarfBuzz unless `--direction rtl` is passed; per-lookup buffers are in
   logical order, the final run may be reordered for RTL.
-- Custom per-feature toggling and per-lookup feature-name labels are not yet
-  wired through the Rust engine (font-default features only).
+- Per-feature toggling is wired through the Rust engine (`--features`, see
+  above) — optional features toggle, script-required features are fixed.
+- Per-lookup feature-name labels (naming each GSUB/GPOS lookup with the
+  features that drive it, e.g. `init medi fina`) are still an open item.

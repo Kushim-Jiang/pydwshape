@@ -33,10 +33,11 @@ use serde_json::{json, Value};
 use windows::core::{Interface, PCSTR, PCWSTR};
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_FACE_TYPE_UNKNOWN, DWRITE_FONT_SIMULATIONS_NONE,
-    DWRITE_GLYPH_OFFSET, DWRITE_SCRIPT_ANALYSIS, DWRITE_SCRIPT_PROPERTIES, DWRITE_SCRIPT_SHAPES,
-    DWRITE_SHAPING_GLYPH_PROPERTIES, DWRITE_SHAPING_TEXT_PROPERTIES, IDWriteFactory,
-    IDWriteFontFace, IDWriteFontFile, IDWriteTextAnalyzer, IDWriteTextAnalyzer1,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_FACE_TYPE_UNKNOWN, DWRITE_FONT_FEATURE,
+    DWRITE_FONT_FEATURE_TAG, DWRITE_FONT_SIMULATIONS_NONE, DWRITE_GLYPH_OFFSET,
+    DWRITE_SCRIPT_ANALYSIS, DWRITE_SCRIPT_PROPERTIES, DWRITE_SCRIPT_SHAPES,
+    DWRITE_SHAPING_GLYPH_PROPERTIES, DWRITE_SHAPING_TEXT_PROPERTIES, DWRITE_TYPOGRAPHIC_FEATURES,
+    IDWriteFactory, IDWriteFontFace, IDWriteFontFile, IDWriteTextAnalyzer, IDWriteTextAnalyzer1,
 };
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Memory::{
@@ -359,6 +360,7 @@ unsafe fn run_getglyphs(
     script: u16,
     rtl: bool,
     locale: Option<&str>,
+    feats: Option<&[DWRITE_FONT_FEATURE]>,
 ) -> ShapeResult {
     let analysis = DWRITE_SCRIPT_ANALYSIS {
         script,
@@ -387,6 +389,29 @@ unsafe fn run_getglyphs(
         st.table = "GSUB".into();
         st.lookup_n = 0;
     });
+    // GetGlyphs uses the typographic-features model:
+    //   features = &[*const DWRITE_TYPOGRAPHIC_FEATURES] ; ranges = [textLength]
+    let mut feat_owned: Vec<DWRITE_FONT_FEATURE> = feats.map(|s| s.to_vec()).unwrap_or_default();
+    let mut typo_box: Option<Box<DWRITE_TYPOGRAPHIC_FEATURES>> = None;
+    let mut feats_arr: Option<Box<[*const DWRITE_TYPOGRAPHIC_FEATURES; 1]>> = None;
+    let mut feats_pp: Option<*const *const DWRITE_TYPOGRAPHIC_FEATURES> = None;
+    let mut range_lens_pp: Option<*const u32> = None;
+    let mut feat_ranges: u32 = 0;
+    if !feat_owned.is_empty() {
+        let typo = Box::new(DWRITE_TYPOGRAPHIC_FEATURES {
+            features: feat_owned.as_mut_ptr(),
+            featureCount: feat_owned.len() as u32,
+        });
+        let typo_ptr: *const DWRITE_TYPOGRAPHIC_FEATURES = &*typo;
+        typo_box = Some(typo);
+        feats_arr = Some(Box::new([typo_ptr]));
+        feats_pp = Some(feats_arr.as_ref().unwrap().as_ptr());
+        let range_lens = vec![len];
+        range_lens_pp = Some(range_lens.as_ptr());
+        feat_ranges = 1;
+        std::mem::forget(range_lens); // keep alive through the call below
+    }
+    let _ = (&typo_box, &feats_arr);
     engine
         .analyzer
         .GetGlyphs(
@@ -397,10 +422,10 @@ unsafe fn run_getglyphs(
             BOOL(rtl as i32),
             &analysis,
             locale_ptr,
-            None,
-            None,
-            None,
-            0,
+            None, // numberSubstitution
+            feats_pp,
+            range_lens_pp,
+            feat_ranges,
             max,
             clusters.as_mut_ptr(),
             textprops.as_mut_ptr(),
@@ -430,6 +455,7 @@ unsafe fn run_getplacements(
     rtl: bool,
     locale: Option<&str>,
     upem: f32,
+    feats: Option<&[DWRITE_FONT_FEATURE]>,
 ) -> Vec<(i32, i32, i32, i32)> {
     let analysis = DWRITE_SCRIPT_ANALYSIS {
         script,
@@ -461,6 +487,28 @@ unsafe fn run_getplacements(
         st.table = "GPOS".into();
         st.lookup_n = 0;
     });
+    // GetGlyphPlacements uses the typographic-features model.
+    let mut feat_owned: Vec<DWRITE_FONT_FEATURE> = feats.map(|s| s.to_vec()).unwrap_or_default();
+    let mut typo_box: Option<Box<DWRITE_TYPOGRAPHIC_FEATURES>> = None;
+    let mut feats_arr: Option<Box<[*const DWRITE_TYPOGRAPHIC_FEATURES; 1]>> = None;
+    let mut feats_pp: Option<*const *const DWRITE_TYPOGRAPHIC_FEATURES> = None;
+    let mut range_lens_pp: Option<*const u32> = None;
+    let mut feat_ranges: u32 = 0;
+    if !feat_owned.is_empty() {
+        let typo = Box::new(DWRITE_TYPOGRAPHIC_FEATURES {
+            features: feat_owned.as_mut_ptr(),
+            featureCount: feat_owned.len() as u32,
+        });
+        let typo_ptr: *const DWRITE_TYPOGRAPHIC_FEATURES = &*typo;
+        typo_box = Some(typo);
+        feats_arr = Some(Box::new([typo_ptr]));
+        feats_pp = Some(feats_arr.as_ref().unwrap().as_ptr());
+        let range_lens = vec![len];
+        range_lens_pp = Some(range_lens.as_ptr());
+        feat_ranges = 1;
+        std::mem::forget(range_lens); // keep alive through the call below
+    }
+    let _ = (&typo_box, &feats_arr);
     let ret = engine.analyzer.GetGlyphPlacements(
         PCWSTR(text.as_ptr()),
         res.cluster_map.as_ptr(),
@@ -475,9 +523,9 @@ unsafe fn run_getplacements(
         BOOL(rtl as i32),
         &analysis,
         locale_ptr,
-        None,
-        None,
-        0,
+        feats_pp,
+        range_lens_pp,
+        feat_ranges,
         advances.as_mut_ptr(),
         offsets.as_mut_ptr(),
     );
@@ -661,6 +709,46 @@ fn pe_lookup_rva_for_sig(path: &str, sig: &[u8]) -> Option<u64> {
     None
 }
 
+fn parse_features(s: &str) -> Option<Vec<DWRITE_FONT_FEATURE>> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let mut v = Vec::new();
+    for tok in t.split(',') {
+        let tok = tok.trim();
+        if tok.is_empty() {
+            continue;
+        }
+        let (tag, on) = if let Some(r) = tok.strip_prefix('+') {
+            (r.to_string(), 1u32)
+        } else if let Some(r) = tok.strip_prefix('-') {
+            (r.to_string(), 0u32)
+        } else if let Some((a, b)) = tok.split_once('=') {
+            let p = b.trim().parse::<u32>().unwrap_or(1);
+            (a.trim().to_string(), p)
+        } else {
+            (tok.to_string(), 1u32)
+        };
+        if tag.len() != 4 {
+            continue;
+        }
+        let b = tag.as_bytes();
+        // DWRITE_FONT_FEATURE_TAG stores the 4CC little-endian, e.g. 'kern'
+        // (k=0x6B first byte) == 0x6E72654B (see DWRITE_FONT_FEATURE_TAG_KERNING).
+        let num = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        v.push(DWRITE_FONT_FEATURE {
+            nameTag: DWRITE_FONT_FEATURE_TAG(num),
+            parameter: on,
+        });
+    }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -674,6 +762,7 @@ fn main() {
     let mut show_all = false;
     let mut out_file: Option<String> = None;
     let mut dwcore: Option<String> = None;
+    let mut features_arg = String::new();
     let mut i = 1;
     while i < args.len() {
         let a = &args[i];
@@ -690,12 +779,13 @@ fn main() {
             "--show-all-lookups" => show_all = true,
             "--out" => out_file = next(&mut i),
             "--dwcore" => dwcore = next(&mut i),
+            "--features" => features_arg = next(&mut i).unwrap_or_default(),
             _ => {}
         }
         i += 1;
     }
     if font.is_empty() || text.is_empty() {
-        eprintln!("usage: dwtshape --font <font> --text <text> [--script <iso15924>] [--language <bcp47>] [--direction auto|ltr|rtl] [--dwcore <DWriteCore.dll>] [--show-all-lookups] [--out <json>]");
+        eprintln!("usage: dwtshape --font <font> --text <text> [--script <iso15924>] [--language <bcp47>] [--direction auto|ltr|rtl] [--features +init,-kern] [--dwcore <DWriteCore.dll>] [--show-all-lookups] [--out <json>]");
         std::process::exit(2);
     }
 
@@ -747,6 +837,7 @@ fn main() {
             Some(language.as_str())
         };
         let text_utf16: Vec<u16> = text.encode_utf16().collect();
+        let feats = parse_features(&features_arg);
 
         ST.with(|s| {
             let mut st = s.borrow_mut();
@@ -757,7 +848,14 @@ fn main() {
         });
 
         // GSUB pass (per-lookup hook fires, table=GSUB).
-        let gres = run_getglyphs(&engine, &text_utf16, script_num, rtl, locale);
+        let gres = run_getglyphs(
+            &engine,
+            &text_utf16,
+            script_num,
+            rtl,
+            locale,
+            feats.as_deref(),
+        );
         // GPOS pass (hook fires if there are GPOS lookups, table=GPOS) + positions.
         let positions = run_getplacements(
             &engine,
@@ -767,6 +865,7 @@ fn main() {
             rtl,
             locale,
             upem as f32,
+            feats.as_deref(),
         );
 
         let (snaps, msgs) = ST.with(|s| {
