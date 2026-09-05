@@ -23,6 +23,6 @@ module-name = "pydwshape._pydwshape"
 python-source = "python"
 bindings = "pyo3"
 features = ["pyo3/extension-module"]
-# Bundle the MS-signed DWriteCore.dll into the wheel at pydwshape/DWriteCore.dll
-# (matched relative to the python-source dir).
-include = ["pydwshape/DWriteCore.dll"]
+# Bundle the MS-signed DWriteCore.dll (+ notice) into the wheel at
+# pydwshape/DWriteCore.dll (matched relative to the python-source dir).
+include = ["pydwshape/DWriteCore.dll", "pydwshape/NOTICE.md"]
