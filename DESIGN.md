@@ -113,6 +113,9 @@ dwtshape --font <path> --text <text> [--script <iso15924>]
          [--show-all-lookups] [--out <file.json>]
 ```
 
+`--script` may be omitted (`auto`/empty behave the same): the script number is
+auto-detected from the text using DWriteCore's own Unicode script data (below).
+
 `--features` forwards a single typographic-features range
 (`DWRITE_TYPOGRAPHIC_FEATURES` + `featureRangeLengths=[len]`) to
 `GetGlyphs`/`GetGlyphPlacements`. `DWRITE_FONT_FEATURE_TAG` stores the 4CC
@@ -124,9 +127,14 @@ are engine-managed and cannot be disabled via the public API (glyphs stay
 `[675,281,303,471,281,351]`; HarfBuzz would give `[673,277,295,461,277,350]`).
 
 Emits the engine JSON above. upem/glyph_count parsed from the font's `head` /
-`maxp` tables (no fontTools dependency). Script tag → DWrite script number via
-`GetScriptProperties` scan (title-case 4CC LE, e.g. `mong`→`Mong`→`0x676E6F4D`
-→ script 59).
+`maxp` tables (no fontTools dependency). An explicit script tag maps to a DWrite
+script number via a `GetScriptProperties` scan (title-case 4CC LE, e.g.
+`mong`→`Mong`→`0x676E6F4D`→ script 59). When `--script` is omitted or `auto`,
+`infer_script_number` is used instead: a per-code-point lookup in
+`src/script_data.rs` (a byte-exact dump of DWriteCore's internal `unicode_data`
+trie, 0..0x10FFFF → DWrite script 0..174), returning the first
+non-Common/Inherited/Unknown script (transparent chars inherit; all-transparent
+falls back to Common).
 
 ## 7. Repo layout
 

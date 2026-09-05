@@ -29,9 +29,14 @@ pip install pydwshape
 from pydwshape import shape_with_dwrite
 
 font = open("font.otf", "rb").read()
-res = shape_with_dwrite(font, "ᠰᠠᠢᠬᠠᠨ", script="mong")
+res = shape_with_dwrite(font, "ᠰᠠᠢᠬᠠᠨ")  # script omitted -> auto-detected
+res = shape_with_dwrite(font, "ᠰᠠᠢᠬᠠᠨ", script="mong")  # explicit
 # res = {upem, glyph_count, stages:[{m,glyphs,depth,effective}], final, messages, engine}
 ```
+
+`script` may be omitted (`auto`/empty behave the same): the script number is
+auto-detected from the text using DWriteCore's own Unicode script data
+(Common/Inherited/combining marks inherit from context).
 
 `features` is a `{tag: bool}` map (same convention as the HarfBuzz/harfrust
 engines): optional features toggle (`{"smcp": True}`, `{"liga": False}` …);

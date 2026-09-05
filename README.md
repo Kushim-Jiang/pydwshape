@@ -69,6 +69,10 @@ target/release/dwtshape --font "hudum.otf" --text "ᠰᠠᠢᠬᠠᠨ" \
 CLI: `--font <path> --text <str> [--script <iso15924>] [--language <bcp47>]
 [--direction auto|ltr|rtl] [--features <+tag,-tag,tag=N,...>]
 [--dwcore <DWriteCore.dll>] [--show-all-lookups] [--out <file>]`.
+`--script` may be omitted (or `auto`/empty): the script number is then
+auto-detected from the text using DWriteCore's own Unicode script data
+(`src/script_data.rs`, a byte-exact dump of DWriteCore's `unicode_data` trie;
+Common/Inherited/combining marks inherit from context).
 (Passing `--text` with non-ASCII from a Windows PowerShell command line is lossy;
 use the Python adapter or an UTF-16-capable launcher.)
 
@@ -107,7 +111,8 @@ Two ways to drive BabelMap's DirectWrite engine from this repo:
 
    ```python
    from pydwshape import shape_with_dwrite
-   res = shape_with_dwrite(font_bytes, text, script="mong")
+   res = shape_with_dwrite(font_bytes, text)  # script omitted -> auto-detected
+   res = shape_with_dwrite(font_bytes, text, script="mong")  # explicit
    ```
 
 Sample output: `build/samples/dwrite_mong.json`.
