@@ -104,10 +104,11 @@ binary; see its docstring for wiring. Sample output:
 ## Layout
 
 - `src/main.rs` — the whole engine (hook, DWrite driver, Crowbar assembly).
-- `python/` — babelmap shaper adapter + `compare_harfbuzz.py` regression matrix.
+- `python/` — babelmap shaper adapter, `compare_harfbuzz.py` regression matrix,
+  and `label_features.py` (per-lookup feature-name labeling, see below).
 - `build/` — research + artifacts (git-ignored): `dwc_poc/` (RE + PoCs,
-  `USE_shaping_order.md`, `hb_compare.py`), `legacy/` (old Python pydwshape),
-  `samples/`.
+  `USE_shaping_order.md`, `hb_compare.py`, `frida_probe_feat.py`), `legacy/`
+  (old Python pydwshape), `samples/`.
 
 ## Notes / constraints
 
@@ -124,5 +125,16 @@ binary; see its docstring for wiring. Sample output:
   logical order, the final run may be reordered for RTL.
 - Per-feature toggling is wired through the Rust engine (`--features`, see
   above) — optional features toggle, script-required features are fixed.
-- Per-lookup feature-name labels (naming each GSUB/GPOS lookup with the
-  features that drive it, e.g. `init medi fina`) are still an open item.
+- Per-lookup feature-name labels are delivered **tool-side** by aligning each
+  DWriteCore stage to the (proven identical) HarfBuzz per-lookup trace:
+  `python/label_features.py --font F --text T --script S [--features X]`.
+  Why not native: DWriteCore's otls dispatcher (hooked at RVA `0x6D280`)
+  fires per *matched position-region* (finer than HarfBuzz's once-per-lookup)
+  and carries no feature tag; the feature-enablement helper (`0x6CA90`) gets
+  the 4CC but is bulk-precomputed per segment, so no per-dispatch feature is
+  observable at that layer. HarfBuzz alignment is exact (Mongolian: all 37
+  stages labelled `init`/`medi`/`fina`/`rclt`).
+- Trace-completeness caveat: a few substitutions (e.g. a trailing `smcp`
+  single-subst on Latin) happen outside the hooked dispatcher, so the stage
+  list may not replay 100% of GSUB changes even though `final` is correct;
+  `label_features.py` reports `trace-complete:` to flag this.

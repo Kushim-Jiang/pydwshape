@@ -133,6 +133,8 @@ Emits the engine JSON above. upem/glyph_count parsed from the font's `head` /
 ```
 Cargo.toml, src/main.rs     Rust engine (single binary)
 python/dwrite_trace_shaper.py   babelmap shaper adapter (calls the binary)
+python/compare_harfbuzz.py      regression matrix (needs babelsoft venv)
+python/label_features.py        per-lookup feature-name labeling (HB-aligned)
 build/dwc_poc/              research: RE, PoCs, USE_order.md, hb_compare.py
 build/legacy/               old Python pydwshape (frida) + original docs
 build/samples/              produced traces (dwrite_mong.json)
@@ -150,13 +152,22 @@ build/samples/              produced traces (dwrite_mong.json)
   default-feature differences vs HarfBuzz are expected). Regression matrix:
   `python/compare_harfbuzz.py`.
 - Remaining / optional:
-  - Per-lookup feature-name labels (init/medi/fina/rclt…) from inside
-    DWriteCore — the dispatcher doesn't pass the feature tag. Options: match
-    each transition against the font's GSUB feature→lookup map, or hook the
-    otls feature driver (explicit `--features` also routes GSUB through a
-    different driver than the hooked default path — an extra hook point to
-    consider); alternatively attribute labels on the babelmap side by
-    aligning the (identical) HarfBuzz per-lookup trace.
+  - Per-lookup feature-name labels — **delivered tool-side** via
+    `python/label_features.py`: aligns each DWriteCore stage to the (proven
+    identical) HarfBuzz per-lookup trace and labels it with HB's feature.
+    Native attribution was investigated and ruled out: the otls dispatcher
+    (RVA `0x6D280`) fires per *matched position-region* (86x vs HB's 16x for
+    the Mongolian run — DWrite splits one HB lookup into per-position
+    dispatches) and carries no feature tag; the feature-enablement helper
+    `0x6CA90` (enables_cache.rs) receives the 4CC in `rdx` but is
+    bulk-precomputed per segment (284x, all features up front), so the last
+    tag seen before a dispatch is only "the segment's last feature"
+    (fina/rvrn) — not the dispatch's feature. No per-feature boundary is
+    exposed at the dispatcher layer.
+  - Trace-completeness caveat (same hook): a few substitutions (e.g. a
+    trailing Latin `smcp` single-subst) are applied outside the hooked
+    dispatcher, so stage rows can omit them while `final` stays correct;
+    `label_features.py` prints `trace-complete:` to flag this.
   - Distribution: bundle DWriteCore into a wheel (data-file wheel today, or a
     PyO3 `abi3` wheel later).
 
@@ -170,3 +181,28 @@ build/samples/              produced traces (dwrite_mong.json)
   Mongolian hudum: `init/medi/fina/rclt=0` unchanged). This is a DirectWrite
   engine constraint, not a bug — document in UI that such checkboxes reflect
   DWriteCore's fixed behavior (HarfBuzz reference output in the table above).
+
+## 10. Feature-label status (implemented, tool-side)
+
+`python/label_features.py` runs `dwtshape` and HarfBuzz on the same input and
+walks the two per-lookup traces in lockstep: DWriteCore's fine-grained stages
+are grouped under the HarfBuzz event whose cumulative end-buffer they reach,
+so every stage is labelled with the feature HarfBuzz attributes to that
+substitution.
+
+```
+& 'D:\Github\babelsoft-py\.venv\Scripts\python.exe' python/label_features.py \
+     --font hudum.otf --text 'ᠰᠠᠢᠬᠠᠨ' --script mong
+dw events=37 hb events=16
+final dw=[675,281,303,471,281,351] hb=[...] equal=True
+trace-complete ... True
+  0 init    673>675
+  1 medi    277>281
+  ...
+```
+
+Validated: Mongolian (37 stages → `init`×1 `medi`×4 `fina`×1 `rclt`×31),
+Latin `liga` (`office fi`), and `+smcp` (equal finals; flags `trace-complete:
+False` for the tail single-subst not captured by the dispatcher hook). Exit
+code 0 only when `final` equals HarfBuzz **and** the trace replays fully.
+
