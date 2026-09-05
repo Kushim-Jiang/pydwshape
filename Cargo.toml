@@ -1,6 +1,6 @@
 [package]
 name = "dwtshape"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "DirectWrite/TextShaping step-by-step shaping tracer (USE order) — babelsoft /api/opentype/shape compatible"
 license = "MIT"

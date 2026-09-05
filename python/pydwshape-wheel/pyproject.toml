@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pydwshape"
-version = "0.1.0"
+version = "0.2.0"
 description = "DWriteCore-native per-lookup OpenType shaping tracer (babelsoft /api/opentype/shape compatible). WINDOWS ONLY."
 readme = "README.md"
 requires-python = ">=3.9"
