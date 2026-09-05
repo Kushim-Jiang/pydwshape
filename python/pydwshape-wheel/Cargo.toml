@@ -1,0 +1,17 @@
+[package]
+name = "pydwshape"
+version = "0.1.0"
+edition = "2021"
+description = "DWriteCore-native per-lookup shaping tracer wheel (Windows only, abi3)"
+license = "MIT"
+
+[lib]
+name = "_pydwshape"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["abi3-py39", "extension-module"] }
+dwtshape = { path = "../.." }
+
+[profile.release]
+opt-level = 3

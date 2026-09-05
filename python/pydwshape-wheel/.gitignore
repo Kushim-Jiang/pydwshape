@@ -1,0 +1,4 @@
+/target
+/dist
+/python/pydwshape/DWriteCore.dll
+*.whl

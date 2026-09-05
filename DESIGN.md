@@ -131,10 +131,11 @@ Emits the engine JSON above. upem/glyph_count parsed from the font's `head` /
 ## 7. Repo layout
 
 ```
-Cargo.toml, src/main.rs     Rust engine (single binary)
+Cargo.toml, src/lib.rs, src/main.rs  Rust engine (lib + thin CLI)
 python/dwrite_trace_shaper.py   babelmap shaper adapter (calls the binary)
 python/compare_harfbuzz.py      regression matrix (needs babelsoft venv)
 python/label_features.py        per-lookup feature-name labeling (HB-aligned)
+python/pydwshape-wheel/         PyO3 abi3 wheel (Windows-only; bundles DWriteCore)
 build/dwc_poc/              research: RE, PoCs, USE_order.md, hb_compare.py
 build/legacy/               old Python pydwshape (frida) + original docs
 build/samples/              produced traces (dwrite_mong.json)
@@ -168,8 +169,13 @@ build/samples/              produced traces (dwrite_mong.json)
     trailing Latin `smcp` single-subst) are applied outside the hooked
     dispatcher, so stage rows can omit them while `final` stays correct;
     `label_features.py` prints `trace-complete:` to flag this.
-  - Distribution: bundle DWriteCore into a wheel (data-file wheel today, or a
-    PyO3 `abi3` wheel later).
+  - Distribution: **done** — `python/pydwshape-wheel/` builds a PyO3 abi3
+    wheel (`py3-none-win_amd64`) that bundles `DWriteCore.dll` and calls the
+    engine in-process via `dwtshape::shape_json`. **Windows-only** (classifier
+    + platform tag + runtime `OSError` on non-Windows); hook is installed per
+    call and restored, so repeated in-process calls are safe. Engine refactor:
+    `src/main.rs` → `src/lib.rs` (`pub fn shape_json`, `pub fn run_cli`) +
+    thin `src/main.rs`.
 
 ## 9. Feature-toggle status (implemented)
 

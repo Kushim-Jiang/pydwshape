@@ -97,15 +97,48 @@ reflect DWriteCore's fixed behavior.
 
 ## babelmap integration
 
-`python/dwrite_trace_shaper.py` is a drop-in shaper that shells out to the
-binary; see its docstring for wiring. Sample output:
-`build/samples/dwrite_mong.json`.
+Two ways to drive BabelMap's DirectWrite engine from this repo:
+
+1. **Shell-out shaper** — `python/dwrite_trace_shaper.py` calls the `dwtshape`
+   binary (see its docstring for wiring).
+2. **Native wheel (recommended for deployment)** — the PyO3 abi3 wheel
+   `pydwshape` (see `python/pydwshape-wheel/`) shapes **in-process** via the
+   bundled DWriteCore, no subprocess:
+
+   ```python
+   from pydwshape import shape_with_dwrite
+   res = shape_with_dwrite(font_bytes, text, script="mong")
+   ```
+
+Sample output: `build/samples/dwrite_mong.json`.
+
+## Python wheel (Windows-only, PyO3 abi3)
+
+`python/pydwshape-wheel/` packages the engine as `pydwshape-…-py3-none-win_amd64.whl`
+(abi3 ≥ 3.9), bundling `DWriteCore.dll` and the native extension so BabelMap
+can call the pure-DWriteCore per-lookup tracer without a subprocess.
+
+**This is Windows-only**: the engine drives Microsoft DWriteCore (Windows App
+SDK) and the trace relies on an x64 inline hook. The wheel carries the
+`Operating System :: Microsoft :: Windows` classifier, is tagged
+`…-win_amd64`, and `import pydwshape` on any other OS raises `OSError`.
+
+```powershell
+cd python/pydwshape-wheel
+Copy-Item ..\..\build\dwc_poc\DWriteCore.dll .\python\pydwshape\DWriteCore.dll  # MS-signed DLL (git-ignored)
+maturin build --release --interpreter <python> -o dist
+```
+
+Repeated in-process calls are safe (the hook is installed per call and
+restored afterwards); `features` uses `{tag: bool}` like the HarfBuzz engines.
 
 ## Layout
 
-- `src/main.rs` — the whole engine (hook, DWrite driver, Crowbar assembly).
+- `src/lib.rs` — the engine (`dwtshape::shape_json`, hook + DWrite driver +
+  Crowbar assembly); `src/main.rs` — thin CLI (`dwtshape::run_cli`).
 - `python/` — babelmap shaper adapter, `compare_harfbuzz.py` regression matrix,
-  and `label_features.py` (per-lookup feature-name labeling, see below).
+  `label_features.py` (per-lookup feature-name labeling), and the
+  `pydwshape-wheel/` PyO3 abi3 wheel project (Windows-only).
 - `build/` — research + artifacts (git-ignored): `dwc_poc/` (RE + PoCs,
   `USE_shaping_order.md`, `hb_compare.py`, `frida_probe_feat.py`), `legacy/`
   (old Python pydwshape), `samples/`.
