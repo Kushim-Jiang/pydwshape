@@ -45,6 +45,8 @@ use windows::Win32::System::Memory::{
     PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,
 };
 
+mod script_data;
+
 // ---------------------------------------------------------------------------
 // Hook registry (DWriteCore.dll 2.1.1.2605) — the per-lookup dispatcher.
 // ---------------------------------------------------------------------------
@@ -311,6 +313,42 @@ unsafe fn make_engine(dll_path: &str, font_path: &str) -> Engine {
         analyzer1,
         face,
     }
+}
+
+/// Look up the DWrite script number (0..174) for a Unicode code point, using
+/// the byte-exact table dumped from DWriteCore's internal `unicode_data` trie
+/// (`unicode_data::script` lookup at RVA 0x106920). This is the same data
+/// DWriteCore's own `script_analysis.rs` consumes for auto itemization.
+fn script_lookup(cp: u32) -> u16 {
+    let r = script_data::SCRIPT_RANGES;
+    let mut lo = 0usize;
+    let mut hi = r.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let (s, e, _) = r[mid];
+        if cp < s {
+            hi = mid;
+        } else if cp >= e {
+            lo = mid + 1;
+        } else {
+            return r[mid].2;
+        }
+    }
+    0 // Unknown
+}
+
+/// Infer the script number for `text` the way DirectWrite's script itemization
+/// does: Common (1) / Inherited (2) / Unknown (0) code points are transparent
+/// and inherit from the surrounding script, so the text's script is the first
+/// non-transparent script. Falls back to Common (1) for all-transparent text.
+fn infer_script_number(text: &str) -> u16 {
+    for c in text.chars() {
+        let s = script_lookup(c as u32);
+        if s != 0 && s != 1 && s != 2 {
+            return s;
+        }
+    }
+    1 // Common
 }
 
 fn resolve_script(analyzer1: &IDWriteTextAnalyzer1, tag: &str) -> u16 {
@@ -813,7 +851,7 @@ pub fn shape_json(opts: ShapeOpts) -> Result<String, String> {
         let script_num = if !script.is_empty() && script != "auto" {
             resolve_script(&engine.analyzer1, &script)
         } else {
-            0
+            infer_script_number(&text)
         };
         let rtl = direction == "rtl";
         let locale = if language.is_empty() {
