@@ -1,47 +1,55 @@
-"""pydwshape — DWriteCore-native per-lookup shaping tracer (Windows only).
+"""pydwshape — DWrite per-lookup shaping tracer: DWriteCore (Windows) or Wine DWrite port (cross-platform).
 
 Drop-in for ``babelmap.backend.dwriteshape_shaper.shape_with_dwrite``: returns
-the babelsoft ``/api/opentype/shape`` engine dict (Crowbar-style stages), but
-the shaping is done **in-process by the bundled DWriteCore** via the native
-PyO3 extension ``pydwshape._pydwshape`` — no subprocess, no system dwrite /
-TextShaping (hijack-proof, engine = DWriteCore only).
+the babelsoft ``/api/opentype/shape`` engine dict (Crowbar-style stages).
 
-This package is Windows-only: it bundles ``DWriteCore.dll`` and the native
-engine is a Windows x64 binary. Importing on any other OS raises OSError.
+Two engines (``backend=``):
+  * ``"dwcore"`` (default, Windows-only) — native Microsoft DWriteCore via the
+    PyO3 extension ``pydwshape._pydwshape`` (in-process, bundled DWriteCore.dll,
+    authoritative DirectWrite per-lookup trace).
+  * ``"winedwrite"`` (cross-platform) — the standalone Wine DWrite port, loaded
+    in-process via ctypes from the bundled shared library (``winedwrite.dll`` /
+    ``libwinedwrite.so`` / ``libwinedwrite.dylib``). Script is auto-detected
+    from the text; Mongolian converges byte-identically to DWriteCore.
+
+Importing the package works on any OS (so the wine backend is usable
+everywhere); the ``dwcore`` backend raises on non-Windows.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 
-if os.name != "nt":
-    raise OSError(
-        "pydwshape is Windows-only (it drives Microsoft DWriteCore). "
-        "See https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/"
-        "use-visual-studio-to-build-windows-apps for the Windows platform."
-    )
+_PKG = Path(__file__).resolve().parent
 
-try:
-    from . import _pydwshape
-except ImportError as e:  # pragma: no cover - only when the wheel is broken
-    raise ImportError(
-        "pydwshape native module missing — the wheel is corrupt, or it was "
-        "built for a different Python/ABI. Reinstall the Windows wheel."
-    ) from e
 
-_DLL = Path(__file__).with_name("DWriteCore.dll")
+def _native() -> object:
+    """The PyO3 DWriteCore extension (Windows only)."""
+    if os.name != "nt":
+        raise OSError(
+            "backend='dwcore' requires Windows (native DWriteCore). "
+            "Use backend='winedwrite' on this platform."
+        )
+    try:
+        from . import _pydwshape
+    except ImportError as e:  # pragma: no cover - corrupt wheel
+        raise ImportError(
+            "pydwshape native module missing — the wheel is corrupt, or it was "
+            "built for a different Python/ABI. Reinstall the Windows wheel."
+        ) from e
+    return _pydwshape
 
 
 def _require_dll() -> str:
-    if not _DLL.exists():
+    p = _PKG / "DWriteCore.dll"
+    if not p.exists():
         raise FileNotFoundError(
-            f"DWriteCore.dll not found next to the module ({_DLL}) — the wheel "
-            "is incomplete. Reinstall pydwshape."
+            f"DWriteCore.dll not found next to the module ({p}) — the wheel is "
+            "incomplete. Reinstall pydwshape."
         )
-    return str(_DLL)
+    return str(p)
 
 
 def _features_to_str(features) -> str | None:
@@ -72,19 +80,33 @@ def shape_with_dwrite(
     language: str = "",
     features: dict | None = None,
     show_all_lookups: bool = False,
+    backend: str = "dwcore",
 ) -> dict:
-    """Shape ``text`` with bundled DWriteCore and return the full per-lookup
-    trace dict (babelsoft ``/api/opentype/shape`` schema).
+    """Shape ``text`` and return the full per-lookup shaping trace dict.
 
+    ``backend`` selects the engine: ``"dwcore"`` (native DWriteCore, Windows)
+    or ``"winedwrite"`` (Wine DWrite port, cross-platform). ``script`` may be
+    given to override auto-detection (both engines auto-detect when omitted).
     ``features`` uses the same ``{tag: bool}`` convention as the HarfBuzz /
-    harfrust engines. Note DWriteCore applies script-required features
-    unconditionally, so toggles only affect *optional* features (see README).
+    harfrust engines; note DWriteCore applies script-required features
+    unconditionally (see README).
     """
     if not isinstance(data, (bytes, bytearray)):
         raise TypeError("data must be font file bytes")
+    data = bytes(data)
+
+    if backend in ("winedwrite", "wine"):
+        from . import _wine
+        return _wine.shape(
+            data, text, script=script, direction=direction,
+            features=features, show_all_lookups=bool(show_all_lookups),
+        )
+    if backend not in ("dwcore", "dwrite", "directwrite"):
+        raise ValueError(f"unknown backend: {backend!r} (use 'dwcore' or 'winedwrite')")
+
     fs = _features_to_str(features)
-    out = _pydwshape.shape_json(
-        bytes(data),
+    out = _native().shape_json(
+        data,
         text,
         script=script,
         language=language,

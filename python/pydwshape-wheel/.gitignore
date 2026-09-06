@@ -1,4 +1,8 @@
 /target
 /dist
 /python/pydwshape/DWriteCore.dll
+# Wine DWrite port shared library is copied in by build.ps1 / build.sh
+/python/pydwshape/winedwrite.dll
+/python/pydwshape/libwinedwrite.so
+/python/pydwshape/libwinedwrite.dylib
 *.whl

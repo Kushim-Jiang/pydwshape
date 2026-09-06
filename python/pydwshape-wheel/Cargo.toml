@@ -11,6 +11,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["abi3-py39", "extension-module"] }
+
+# The dwtshape (DWriteCore) engine is Windows-only (loads+hooks DWriteCore).
+# Gate it to Windows so the wheel crate also builds on Linux/macOS, where the
+# cross-platform Wine DWrite backend (pydwshape/_wine.py) is used instead.
+[target.'cfg(windows)'.dependencies]
 dwtshape = { path = "../.." }
 
 [profile.release]

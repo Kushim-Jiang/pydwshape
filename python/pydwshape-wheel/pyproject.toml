@@ -5,15 +5,17 @@ build-backend = "maturin"
 [project]
 name = "pydwshape"
 version = "0.2.0"
-description = "DWriteCore-native per-lookup OpenType shaping tracer (babelsoft /api/opentype/shape compatible). WINDOWS ONLY."
+description = "DWrite per-lookup OpenType shaping tracer (babelsoft /api/opentype/shape compatible). Native DWriteCore on Windows; cross-platform Wine DWrite port backend."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-keywords = ["directwrite", "dwritecore", "opentype", "shaping", "babelmap"]
+keywords = ["directwrite", "dwritecore", "opentype", "shaping", "babelmap", "wine"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Text Processing :: Fonts",
 ]
@@ -23,6 +25,13 @@ module-name = "pydwshape._pydwshape"
 python-source = "python"
 bindings = "pyo3"
 features = ["pyo3/extension-module"]
-# Bundle the MS-signed DWriteCore.dll (+ notice) into the wheel at
-# pydwshape/DWriteCore.dll (matched relative to the python-source dir).
-include = ["pydwshape/DWriteCore.dll", "pydwshape/NOTICE.md"]
+# Bundle the MS-signed DWriteCore.dll (Windows, dwcore backend) and the Wine
+# DWrite port shared library (winedwrite.dll / libwinedwrite.so / .dylib).
+# Build scripts copy the right library in before `maturin build`.
+include = [
+    "pydwshape/DWriteCore.dll",
+    "pydwshape/NOTICE.md",
+    "pydwshape/winedwrite.dll",
+    "pydwshape/libwinedwrite.so",
+    "pydwshape/libwinedwrite.dylib",
+]
