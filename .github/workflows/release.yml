@@ -46,6 +46,28 @@ jobs:
       - name: Install maturin
         run: python -m pip install --upgrade pip maturin
 
+      - name: Set up MSYS2 (MinGW gcc for the Wine port)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Build Wine DWrite port (winedwrite.dll)
+        shell: pwsh
+        run: |
+          $gcc = 'C:\msys64\mingw64\bin\gcc.exe'
+          if (-not (Test-Path $gcc)) {
+            $cand = Get-ChildItem 'C:\msys64\mingw64\bin\gcc.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cand) { $gcc = $cand.FullName }
+          }
+          if (-not (Test-Path $gcc)) { throw 'MSYS2 MinGW gcc not found' }
+          Write-Output "gcc: $gcc"
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\wine_dwrite\port\build.ps1 -Gcc $gcc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item tools\wine_dwrite\port\build\winedwrite.dll python\pydwshape-wheel\python\pydwshape\ -Force
+          Write-Output 'winedwrite.dll bundled'
+
       - name: Fetch DWriteCore.dll (Windows App SDK, MS-signed)
         shell: pwsh
         run: |
@@ -65,12 +87,22 @@ jobs:
         working-directory: python/pydwshape-wheel
         run: python -m maturin build --release --interpreter python -o dist
 
-      - name: Smoke (import + bundled DLL present)
+      - name: Smoke (both backends + bundled DLLs)
         shell: pwsh
         run: |
           $whl = (Get-ChildItem 'python\pydwshape-wheel\dist\*.whl' | Select-Object -First 1).FullName
           python -m pip install --quiet $whl
-          python -c "import pydwshape, os; p = os.path.dirname(pydwshape.__file__); assert os.path.exists(os.path.join(p, 'DWriteCore.dll')), 'DWriteCore.dll missing'; print('smoke ok:', p)"
+          $code = @"
+          import pydwshape, os
+          p = os.path.dirname(pydwshape.__file__)
+          assert os.path.exists(os.path.join(p, 'DWriteCore.dll')), 'DWriteCore.dll missing'
+          assert os.path.exists(os.path.join(p, 'winedwrite.dll')), 'winedwrite.dll missing'
+          font = open('tools/wine_dwrite/wine-src/dlls/dwrite/tests/wine_test.ttf', 'rb').read()
+          r = pydwshape.shape_with_dwrite(font, 'AVATAR', backend='winedwrite')
+          assert r['engine'] == 'winedwrite' and r['final'], r
+          print('smoke ok:', p)
+          "@
+          python -c $code
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
