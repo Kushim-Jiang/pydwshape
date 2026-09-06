@@ -54,19 +54,14 @@ jobs:
           install: mingw-w64-x86_64-gcc
 
       - name: Build Wine DWrite port (winedwrite.dll)
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          $gcc = 'C:\msys64\mingw64\bin\gcc.exe'
-          if (-not (Test-Path $gcc)) {
-            $cand = Get-ChildItem 'C:\msys64\mingw64\bin\gcc.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($cand) { $gcc = $cand.FullName }
-          }
-          if (-not (Test-Path $gcc)) { throw 'MSYS2 MinGW gcc not found' }
-          Write-Output "gcc: $gcc"
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools\wine_dwrite\port\build.ps1 -Gcc $gcc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item tools\wine_dwrite\port\build\winedwrite.dll python\pydwshape-wheel\python\pydwshape\ -Force
-          Write-Output 'winedwrite.dll bundled'
+          set -e
+          gcc_win="$(cygpath -w "$(command -v gcc)")"
+          echo "gcc: ${gcc_win}"
+          /c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/wine_dwrite/port/build.ps1 -Gcc "${gcc_win}"
+          cp tools/wine_dwrite/port/build/winedwrite.dll python/pydwshape-wheel/python/pydwshape/
+          echo 'winedwrite.dll bundled'
 
       - name: Fetch DWriteCore.dll (Windows App SDK, MS-signed)
         shell: pwsh
