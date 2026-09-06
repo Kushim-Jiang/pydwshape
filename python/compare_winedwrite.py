@@ -75,14 +75,17 @@ def main():
         det = w.get("messages") and None
         note = ""
         same_dwc = same_hb = None
+        dwc_g = hb_g = None
         try:
-            same_dwc = wg == dwc_shape(font, text)
+            dwc_g = dwc_shape(font, text)
         except Exception as e:
             note = f"dwc err {e}"
         try:
-            same_hb = wg == hb_shape(font, text)
+            hb_g = hb_shape(font, text)
         except Exception as e:
             note = (note + " " if note else "") + f"hb err {e}"
+        same_dwc = wg == dwc_g if dwc_g is not None else None
+        same_hb = wg == hb_g if hb_g is not None else None
         ok_golden = True if golden is None else wg == golden
         caseok = True
         if label.startswith("mongolian"):
@@ -91,6 +94,12 @@ def main():
                 allok = False
         elif same_dwc is False and same_hb is False:
             note = "differs from DWC and HB (info)"
+            # Same glyph set as both engines but a different order means the
+            # GSUB itself is correct — a post-GSUB complex-script (Indic)
+            # final reordering is missing (that is what DWC/HB run to move
+            # reph/marks after their base).
+            if dwc_g is not None and hb_g is not None and sorted(wg) == sorted(dwc_g) == sorted(hb_g):
+                note = "glyph-set==DWC/HB; order differs (needs Indic final reordering)"
         print(f"{label:<18} {len(wg):>3} {str(same_dwc):>6} {str(same_hb):>5} "
               f"{'OK' if ok_golden else 'BAD':>7}  {note}")
     print("\nPASS" if allok else "\nFAILURES ABOVE")

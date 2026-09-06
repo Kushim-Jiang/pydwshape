@@ -1,0 +1,114 @@
+# Build the cross-platform Wine DWrite backend wheel on Linux and macOS.
+#
+# Unlike the Windows-only dwcore (DWriteCore) backend, `backend="winedwrite"`
+# is built from tools/wine_dwrite/port via `make lib` and bundles the shared
+# library into the wheel (libwinedwrite.so / libwinedwrite.dylib). The crate's
+# dwtshape dependency is cfg(windows)-gated and lib.rs stubs the dwcore engine
+# off-Windows, so the abi3 wheel compiles everywhere. These jobs verify that
+# path actually builds and that the installed wheel can shape with the Wine
+# backend (using the bundled wine_test.ttf as a font).
+#
+# Trigger: any push touching the port / wheel sources, or manual dispatch.
+
+name: build-port
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/wine_dwrite/**"
+      - "python/pydwshape-wheel/**"
+      - "Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux wine-backend wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip maturin
+
+      - name: Build Wine port shared library
+        run: make -C tools/wine_dwrite/port lib
+
+      - name: Bundle lib into package
+        run: cp tools/wine_dwrite/port/libwinedwrite.so python/pydwshape-wheel/python/pydwshape/
+
+      - name: Build abi3 wheel
+        working-directory: python/pydwshape-wheel
+        run: python -m maturin build --release --interpreter python -o dist
+
+      - name: Smoke installed wheel (wine backend)
+        run: |
+          python -m pip install python/pydwshape-wheel/dist/*.whl
+          python - <<'PY'
+          import os, pydwshape
+          p = os.path.dirname(pydwshape.__file__)
+          assert os.path.exists(os.path.join(p, 'libwinedwrite.so')), 'libwinedwrite.so missing'
+          try:
+              pydwshape.shape_with_dwrite(b'', 'x', backend='dwcore')
+          except OSError:
+              pass  # dwcore raises off-Windows by design
+          else:
+              raise SystemExit('dwcore should raise off-Windows')
+          font = open('tools/wine_dwrite/wine-src/dlls/dwrite/tests/wine_test.ttf', 'rb').read()
+          r = pydwshape.shape_with_dwrite(font, 'AVATAR', backend='winedwrite')
+          assert r['engine'] == 'winedwrite', r
+          assert r['final'], r
+          print('wine backend ok:', [g['g'] for g in r['final']])
+          PY
+
+  macos:
+    name: macOS wine-backend wheel
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip maturin
+
+      - name: Build Wine port shared library
+        run: make -C tools/wine_dwrite/port lib
+
+      - name: Bundle lib into package
+        run: cp tools/wine_dwrite/port/libwinedwrite.dylib python/pydwshape-wheel/python/pydwshape/
+
+      - name: Build abi3 wheel
+        working-directory: python/pydwshape-wheel
+        run: python -m maturin build --release --interpreter python -o dist
+
+      - name: Smoke installed wheel (wine backend)
+        run: |
+          python -m pip install python/pydwshape-wheel/dist/*.whl
+          python - <<'PY'
+          import os, pydwshape
+          p = os.path.dirname(pydwshape.__file__)
+          assert os.path.exists(os.path.join(p, 'libwinedwrite.dylib')), 'libwinedwrite.dylib missing'
+          font = open('tools/wine_dwrite/wine-src/dlls/dwrite/tests/wine_test.ttf', 'rb').read()
+          r = pydwshape.shape_with_dwrite(font, 'AVATAR', backend='winedwrite')
+          assert r['engine'] == 'winedwrite', r
+          assert r['final'], r
+          print('wine backend ok:', [g['g'] for g in r['final']])
+          PY

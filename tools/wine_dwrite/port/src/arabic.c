@@ -77,6 +77,36 @@ static void arabic_collect_features(struct scriptshaping_context *context,
         shape_start_next_stage(features, NULL);
     }
 
+    /* Universal complex-script features (Indic / USE GSUB set). Scripts such
+     * as Devanagari whose shaping is fully encoded in the font's GSUB lookup
+     * order — as DWriteCore's generic otls engine applies them, with no
+     * per-script shaper — only need these features enabled. They share one
+     * stage so the collected lookups are applied sorted by lookup index, i.e.
+     * in the font author's intended order. Scripts that lack these lookups
+     * (Latin, Mongolian hudum, ...) are unaffected. */
+    static const unsigned int complex_gsub_features[] =
+    {
+        DWRITE_MAKE_OPENTYPE_TAG('n','u','k','t'),
+        DWRITE_MAKE_OPENTYPE_TAG('a','k','h','n'),
+        DWRITE_MAKE_OPENTYPE_TAG('r','p','h','f'),
+        DWRITE_MAKE_OPENTYPE_TAG('r','k','r','f'),
+        DWRITE_MAKE_OPENTYPE_TAG('p','r','e','f'),
+        DWRITE_MAKE_OPENTYPE_TAG('b','l','w','f'),
+        DWRITE_MAKE_OPENTYPE_TAG('h','a','l','f'),
+        DWRITE_MAKE_OPENTYPE_TAG('a','b','v','f'),
+        DWRITE_MAKE_OPENTYPE_TAG('p','s','t','f'),
+        DWRITE_MAKE_OPENTYPE_TAG('v','a','t','u'),
+        DWRITE_MAKE_OPENTYPE_TAG('c','j','c','t'),
+        DWRITE_MAKE_OPENTYPE_TAG('a','b','v','s'),
+        DWRITE_MAKE_OPENTYPE_TAG('b','l','w','s'),
+        DWRITE_MAKE_OPENTYPE_TAG('h','a','l','n'),
+        DWRITE_MAKE_OPENTYPE_TAG('p','r','e','s'),
+        DWRITE_MAKE_OPENTYPE_TAG('p','s','t','s'),
+    };
+    for (i = 0; i < ARRAY_SIZE(complex_gsub_features); ++i)
+        shape_enable_feature(features, complex_gsub_features[i], 0);
+    shape_start_next_stage(features, NULL);
+
     shape_enable_feature(features, DWRITE_MAKE_OPENTYPE_TAG('r','l','i','g'), FEATURE_MANUAL_ZWJ | FEATURE_HAS_FALLBACK);
 
     shape_enable_feature(features, DWRITE_MAKE_OPENTYPE_TAG('r','c','l','t'), FEATURE_MANUAL_ZWJ);
