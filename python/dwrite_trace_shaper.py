@@ -60,17 +60,34 @@ def shape_with_dwrite(
     language: str = "",
     features: dict | None = None,
     show_all_lookups: bool = False,
+    backend: str = "dwcore",
 ) -> dict:
-    """Shape ``text`` with DWriteCore (pure DWriteCore native per-lookup
-    trace) and return the full per-lookup shaping trace (schema-compatible
-    with the HarfBuzz engine).
+    """Shape ``text`` and return the full per-lookup shaping trace.
+
+    ``backend`` selects the engine:
+      * ``"dwcore"`` (default, Windows-only) — native Microsoft DWriteCore via
+        the ``dwtshape`` binary (authoritative DirectWrite trace).
+      * ``"winedwrite"`` (cross-platform) — the standalone Wine DWrite port
+        (``tools/wine_dwrite``), loaded in-process via ctypes. Script is
+        auto-detected from the text; Mongolian converges byte-identically to
+        DWriteCore on the corpus.
 
     ``features`` is a ``{tag: bool|int}`` map (same convention as babelmap's
     HarfBuzz / harfrust engines) or a ready-made ``+tag,-tag,tag=N`` string.
     Note: DWriteCore applies script-required features unconditionally, so
     toggles only affect *optional* features (e.g. ``liga``/``kern``/``smcp``)
     and are ignored for mandatory positional features (Mongolian/Arabic
-    ``init``/``medi``/``fina``/``rclt`` …)."""
+    ``init``/``medi``/``fina``/``rclt`` …).
+    """
+    if backend == "winedwrite":
+        from winedwrite_shaper import shape_with_winedwrite
+        d = shape_with_winedwrite(data, text, script=script, direction=direction)
+        d.setdefault("messages", []).insert(
+            0, "engine=winedwrite (cross-platform Wine DWrite port; script auto-detected)")
+        return d
+    if backend not in ("dwcore", "dwrite", "directwrite"):
+        raise ValueError(f"unknown backend: {backend!r} (use 'dwcore' or 'winedwrite')")
+
     fd, tmp = tempfile.mkstemp(suffix=".font")
     try:
         os.close(fd)
